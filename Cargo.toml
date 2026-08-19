@@ -1,0 +1,11 @@
+[package]
+name = "umber"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "An (hopefully) ergonomic ECS crate."
+readme = "readme.md"
+repository = "https://github.com/revanj/umber"
+keywords = ["gamedev", "ecs"]
+
+[dependencies]
