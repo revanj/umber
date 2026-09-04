@@ -413,7 +413,7 @@ pub struct Ecs {
         }
     }
 
-    pub fn exec<M, H: Handler<M>>(&mut self, system: H) {
+    pub fn exec<M, H: System<M>>(&mut self, system: H) {
         system.call(self);
     }
 }
@@ -431,11 +431,11 @@ impl<T: DynResource> IndexMut<Res<T>> for Ecs {
     }
 }
 
-pub trait Handler<Marker> {
+pub trait System<SelfType> {
     fn call(self, ecs: &mut Ecs);
 }
 
-impl<F, A> Handler<fn(A,)> for F 
+impl<F, A> System<fn(A,)> for F 
     where A: IsQueryElement, F: Fn(A) + for<'b> Fn(A::Item<'b>)
 {
     fn call(self, ecs: &mut Ecs) {
@@ -448,7 +448,7 @@ impl<F, A> Handler<fn(A,)> for F
     }
 }
 
-impl<F, A, B> Handler<fn(A, B)> for F 
+impl<F, A, B> System<fn(A, B)> for F 
     where F: Fn(A, B) + for <'b> Fn(A::Item<'b>, B::Item<'b>), A: IsQueryElement, B: IsQueryElement,
 {
     fn call(self, ecs: &mut Ecs) {
@@ -471,11 +471,8 @@ impl<F, A, B> Handler<fn(A, B)> for F
     }
 }
 
-pub trait Component where Self: 'static {}
-
 
 trait IsQueryElement {
-    const MUTABLE: bool;
     type Item<'c>;
     type Type: 'static;
     type ContainerType: EcsContainer<Item=Self::Type>;
@@ -486,11 +483,7 @@ trait IsQueryElement {
     fn convert<'c>(item: &'c mut Self::Type) -> Self::Item<'c>;
 }
 
-pub trait IsQuery {
-}
-
-impl<'a, T: 'static> IsQueryElement for &'a T where T: Component { 
-    const MUTABLE: bool = false;
+impl<'a, T: 'static> IsQueryElement for &'a T {//where T: Component { 
     type Item<'c> = &'c T;
     type Type = T; 
     type ContainerType = SparseSet<T>;
@@ -512,8 +505,7 @@ impl<'a, T: 'static> IsQueryElement for &'a T where T: Component {
     }
 }
 
-impl<'a, T> IsQueryElement for &'a mut T where T: Component + 'static {
-    const MUTABLE: bool = true;
+impl<'a, T> IsQueryElement for &'a mut T where T: 'static {
     type Item<'c> = &'c mut T;
     type Type = T; 
     type ContainerType = SparseSet<T>;
@@ -535,39 +527,9 @@ impl<'a, T> IsQueryElement for &'a mut T where T: Component + 'static {
 }
 
 
-impl<A: IsQueryElement> IsQuery for A {
-}
-
-impl<A: IsQueryElement> IsQuery for (A,) {
-}
-
-impl< 
-    A: IsQueryElement, 
-    B: IsQueryElement> 
-IsQuery for (A, B) {
-}
-
-impl<'a, 
-    A: IsQueryElement, 
-    B: IsQueryElement, 
-    C: IsQueryElement> 
-IsQuery for (A, B, C) {
-}
-
-impl< 
-    A: IsQueryElement, 
-    B: IsQueryElement, 
-    C: IsQueryElement, 
-    D: IsQueryElement> 
-IsQuery for (A, B, C, D) {
-}
-
 #[cfg(test)]
 mod test {
-    use crate::ecs::{Component, Ecs, IsQuery};
-
-    impl Component for C1 {} 
-    impl Component for C2 {}
+    use crate::ecs::{Ecs};
 
     struct C1(bool);
     struct C2(bool);
@@ -578,10 +540,21 @@ mod test {
         let ett = ecs.new_entity();
         ecs.add(ett, C1(true));
         ecs.add(ett, C2(false));
+
+        let closure_system = |c1: &C1, c2: &C2| {
+            println!("c1 is {}, c2 is {}", c1.0, c2.0);
+        };
+
+        ecs.exec(print_component);
+        ecs.exec(closure_system);
+        ecs.exec(change_c1);
         ecs.exec(print_component);
     }
 
     fn print_component(c1: &C1, c2: &C2) {
         println!("c1 is {}, c2 is {}", c1.0, c2.0);
+    }
+    fn change_c1(c1: &mut C1) {
+        c1.0 = false;
     }
 }
