@@ -9,3 +9,5 @@ repository = "https://github.com/revanj/umber"
 keywords = ["gamedev", "ecs"]
 
 [dependencies]
+rj = { path = "../rj/rj/"}
+foldhash = "0.2"
