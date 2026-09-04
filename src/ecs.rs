@@ -34,7 +34,7 @@ pub enum TreeOrder {
 #[derive(Copy, Clone, Eq, Hash, PartialEq, Debug)]
 pub struct Entity(GenerationalIndex);
 impl Entity {
-    pub fn index(&self) -> GenerationalIndex {
+    pub(crate) fn index(&self) -> GenerationalIndex {
         self.0
     }
 }
@@ -208,9 +208,9 @@ pub struct Ecs {
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(index))
     }
-    pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get_ref(entity.0) }
+    pub(crate) fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get_ref(entity.0) }
 
-    pub fn _get_mut<T: 'static>(&mut self, index: GenerationalIndex) -> Option<&mut T> {
+    pub(crate) fn _get_mut<T: 'static>(&mut self, index: GenerationalIndex) -> Option<&mut T> {
         let container = self.get_container_mut::<T>();
         container.and_then(|x| x.get_mut(index))
     }

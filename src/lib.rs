@@ -2,13 +2,14 @@ mod sparse_set;
 mod ecs;
 mod query;
 
-use sparse_set::SparseSet;
+pub use sparse_set::SparseSet;
 use sparse_set::GenerationalIndex;
 
 use ecs::DynEcsContainer;
 use ecs::EcsContainer;
-use ecs::Entity;
-use ecs::Ecs;
-use query::IsQueryElement;
+
+pub use ecs::Entity;
+pub use ecs::Ecs;
+pub use query::IsQueryElement;
 
 use query::System;

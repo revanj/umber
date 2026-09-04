@@ -41,7 +41,7 @@ pub struct SparseSet<T> {
 } impl<T> SparseSet<T> {
     pub fn new() -> Self { Self { sparse: Vec::new(), dense: Vec::new(), total: 0 }}
 
-    pub fn insert(&mut self, index: GenerationalIndex, value: T) {
+    pub(crate) fn insert(&mut self, index: GenerationalIndex, value: T) {
 	    let dense_location = self.dense.len();
 	    self.dense.push((index, value));
 
@@ -82,17 +82,17 @@ pub struct SparseSet<T> {
         &mut self.dense[dense_index].1
     }
 
-    pub fn get(&self, index: GenerationalIndex) -> Option<&T> {
+    pub(crate) fn get(&self, index: GenerationalIndex) -> Option<&T> {
         if !self.contains(index) { None }
         else { Some(self.get_unchecked(index)) }
     }
 
-    pub fn get_mut(&mut self, index: GenerationalIndex) -> Option<&mut T> {
+    pub(crate) fn get_mut(&mut self, index: GenerationalIndex) -> Option<&mut T> {
         if !self.contains(index) { None }
         else { Some(self.get_mut_unchecked(index)) }
     }
 
-    pub fn get_disjoint_mut<const N: usize>(&mut self, indices: [GenerationalIndex; N]) -> [&mut T; N] {
+    pub(crate) fn get_disjoint_mut<const N: usize>(&mut self, indices: [GenerationalIndex; N]) -> [&mut T; N] {
         let mut usize_indices: [usize; N] = [0; N];
         for i in 0..N { usize_indices[i] = indices[i].index(); }
         let dense_indices: [&mut GenerationalIndex; N] = self.sparse.get_disjoint_mut(usize_indices).unwrap();
@@ -105,15 +105,15 @@ pub struct SparseSet<T> {
         self.total
     }
 
-    pub fn indices(&self) -> IndexIterator<'_, T> {
+    fn indices(&self) -> IndexIterator<'_, T> {
         IndexIterator { container: self, idx: 0 }
     }
 
-    pub fn iter(&self) -> DenseIterator<'_, T> {
+    fn iter(&self) -> DenseIterator<'_, T> {
         DenseIterator { container: self, idx: 0 }
     }
 
-    pub fn iter_mut(&mut self) -> DenseMutIterator<'_, T> {
+    fn iter_mut(&mut self) -> DenseMutIterator<'_, T> {
         DenseMutIterator {
             ptr: NonNull::from(self.dense.as_mut_slice()).cast(),
             idx: 0,
@@ -123,7 +123,7 @@ pub struct SparseSet<T> {
     }
 }
 
-struct IndexIterator<'a, T> {
+pub(crate) struct IndexIterator<'a, T> {
     container: &'a SparseSet<T>,
     idx: usize,
 }
@@ -139,7 +139,7 @@ impl <'a, T> Iterator for IndexIterator<'a, T> {
         else { None }
     }
 }
-pub struct EntityIterator<'a, T> {
+pub(crate) struct EntityIterator<'a, T> {
     container: &'a SparseSet<T>,
     idx: usize,
 }
@@ -164,7 +164,7 @@ impl <'a, T> From<IndexIterator<'a, T>> for EntityIterator<'a, T> {
     }
 }
 
-pub struct EntityComponentIterator<'a, T> {
+pub(crate) struct EntityComponentIterator<'a, T> {
     container: &'a SparseSet<T>,
     idx: usize,
 }
@@ -192,7 +192,7 @@ impl <'a, T> From<DenseIterator<'a, T>> for EntityComponentIterator<'a, T> {
     }
 }
 
-pub struct EntityComponentMutIterator<'a, T> {
+pub(crate) struct EntityComponentMutIterator<'a, T> {
     ptr: NonNull<(GenerationalIndex, T)>,
     idx: usize,
     size: usize,
