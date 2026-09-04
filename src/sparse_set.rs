@@ -2,7 +2,7 @@ use std::{marker::PhantomData, ptr::NonNull};
 use rj::AsAny;
 use crate::Entity;
 use crate::EcsContainer;
-use crate::DynSparseSet;
+use crate::DynEcsContainer;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub(crate) struct GenerationalIndex(u32);
@@ -286,20 +286,19 @@ impl<T: 'static> AsAny for SparseSet<T> {
     fn as_any_mut(self: &mut Self) -> &mut dyn std::any::Any { self }
 }
 
-impl<T: 'static> DynSparseSet for SparseSet<T> {
-    fn contains(&self, entity: Entity) -> bool {
+impl<T: 'static> DynEcsContainer for SparseSet<T> {
+    fn len(&self) -> usize {
+        self.total
+    }
+    fn contains_entity(&self, entity: Entity) -> bool {
         self.contains(entity.index())
     }
 }
 
 
-
 impl<T: 'static> EcsContainer for SparseSet<T> {
     type Item = T;
 
-    fn len(&self) -> usize {
-        self.len()
-    }
     fn entities(&self) -> impl Iterator<Item=Entity> {
         EntityIterator::from(self.indices())
     }
@@ -309,10 +308,6 @@ impl<T: 'static> EcsContainer for SparseSet<T> {
 
     fn get_mut(&mut self, ett: Entity) -> Option<&mut Self::Item> {
         self.get_mut(ett.index())
-    }
-
-    fn contains_entity(&self, ett: Entity) -> bool {
-        self.contains(ett.index())
     }
 
     fn components(&mut self) -> impl Iterator<Item=&Self::Item> {

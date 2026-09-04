@@ -8,18 +8,18 @@ use foldhash::{HashMap, HashMapExt};
 use crate::GenerationalIndex;
 use crate::SparseSet;
 use crate::IsQueryElement;
+use crate::System;
 
-pub trait DynSparseSet: AsAny {
-    fn contains(&self, entity: Entity) -> bool;
-}
-pub trait EcsContainer {
-    type Item;
-
+pub trait DynEcsContainer: AsAny  {
     fn len(&self) -> usize; 
+    fn contains_entity(&self, entity: Entity) -> bool;
+}
+
+pub trait EcsContainer: DynEcsContainer {
+    type Item;
     fn entities(&self) -> impl Iterator<Item=Entity>;
     fn get(&self, ett: Entity) -> Option<&Self::Item>;
     fn get_mut(&mut self, ett: Entity) -> Option<&mut Self::Item>;
-    fn contains_entity(&self, ett: Entity) -> bool; 
     fn components(&mut self) -> impl Iterator<Item=&Self::Item>; 
     fn components_mut(&mut self) -> impl Iterator<Item=&mut Self::Item>; 
     fn entities_components(&self) -> impl Iterator<Item=(Entity, &Self::Item)>;
@@ -42,102 +42,6 @@ impl Entity {
 impl From<GenerationalIndex> for Entity {
     fn from(handle: GenerationalIndex) -> Self { Entity(handle) }
 }
-
-pub trait TypeIdArray {
-    type Containers<'a>;
-    fn fetch<'a>(&self, silos: &'a mut HashMap<TypeId, Box<dyn DynSparseSet>>) -> Self::Containers<'a>;
-}
-
-//pub trait AccessArray {
-//    type Containers<'a>;
-//    fn fetch<'a>(&self, silos: &'a mut HashMap<TypeId, Box<dyn DynSparseSet>>) -> Self::Containers<'a>;
-//}
-
-
-impl<const M: usize> TypeIdArray for [TypeId; M] {
-    type Containers<'a> = [&'a mut Box<dyn DynSparseSet>; M];
-    fn fetch<'a>(&self, silos: &'a mut HashMap<TypeId, Box<dyn DynSparseSet>>) -> [&'a mut Box<dyn DynSparseSet>; M] {
-        silos.get_disjoint_mut(self.each_ref()).map(|r| r.unwrap())
-    }
-}
-
-pub trait TypeIds {
-    type Ref<'a>;
-    type Mut<'a>: Downgrade<Ref = Self::Ref<'a>>;
-    type Ids: TypeIdArray + IntoIterator<Item=TypeId>;
-
-    fn type_ids() -> Self::Ids;
-    fn containers_to_muts<'a, const N: usize>(
-        containers: <Self::Ids as TypeIdArray>::Containers<'a>, 
-        entities: [Entity; N]) -> [Self::Mut<'a>; N];
-}
-
-#[macro_export]
-macro_rules! impl_query {
-    ($($t:ident),+) => {
-        impl<$($t: 'static),+> TypeIds for ($($t,)+) {
-            type Ref<'a> = ($(&'a $t,)+);
-            type Mut<'a> = ($(&'a mut $t,)+);
-            type Ids = [TypeId; <[&str]>::len(&[$(stringify!($t)),+])];
-
-            fn type_ids() -> Self::Ids {
-                [$(TypeId::of::<$t>()),+]
-            }
-
-            #[allow(non_snake_case)]
-            fn containers_to_muts<'a, const N: usize>(
-                containers: <Self::Ids as TypeIdArray>::Containers<'a>,
-                entities: [Entity; N],
-            ) -> [Self::Mut<'a>; N] {
-                let rows: [GenerationalIndex; N] = ::std::array::from_fn(|i| entities[i].index());
-
-                let mut it = containers.into_iter();
-                $(
-                    let set = it
-                        .next()
-                        .expect("too few containers")
-                        .as_any_mut()
-                        .downcast_mut::<SparseSet<$t>>()
-                        .expect("component type mismatch");
-                    let mut $t: [Option<&'a mut $t>; N] =
-                        set.get_disjoint_mut(rows).map(Some);
-                )+
-
-                std::array::from_fn(|i| ($( $t[i].take().unwrap(), )+))
-            }
-        }
-    };
-}
-
-impl_query!(A);
-impl_query!(A, B);
-impl_query!(A, B, C);
-
-pub trait Downgrade {
-    type Ref;
-    fn downgrade(self) -> Self::Ref;
-}
-
-#[macro_export]
-macro_rules! impl_downgrade {
-    ($($t:ident),+) => {
-        #[allow(non_snake_case)]
-        impl<'a, $($t: 'a),+> Downgrade for ($(&'a mut $t,)+) {
-            type Ref = ($(&'a $t,)+);
-            fn downgrade(self) -> Self::Ref {
-                let ($($t,)+) = self;
-                let out: Self::Ref = ($($t,)+);
-                out
-            }
-        }
-    };
-}
-
-impl_downgrade!(A);
-impl_downgrade!(A, B);
-impl_downgrade!(A, B, C);
-
-pub struct Handle<T>(GenerationalIndex, PhantomData<T>);
 
 #[derive(Clone, Copy)]
 pub struct Relation {
@@ -174,7 +78,7 @@ pub struct Res<T> {
 pub struct Ecs {
     resources: HashMap<TypeId, Box<dyn DynResource>>,
     entities: Vec<Entity>,
-    pub silos: HashMap<TypeId, Box<dyn DynSparseSet>>
+    pub silos: HashMap<TypeId, Box<dyn DynEcsContainer>>
 } impl Ecs {
     pub fn new() -> Self { Self { 
         resources: HashMap::new(),
@@ -218,10 +122,6 @@ pub struct Ecs {
         typed_res
     }
 
-    pub fn get_resource_clone<T: DynResource + Clone>(&self) -> T {
-        self.get_resource::<T>().clone()
-    }
-
     pub fn add<T: 'static>(&mut self, entity: Entity, component: T) {
         let type_name = std::any::type_name::<T>();
 
@@ -239,51 +139,17 @@ pub struct Ecs {
         }
     }
 
-    pub fn query<Q>(&self) -> Vec<Entity> where Q: TypeIds {
-        let mut ret = Vec::new();
-    'entity_filter:
-        for e in &self.entities {
-            for type_id in Q::type_ids() {
-                if !self.silos.contains_key(&type_id) { continue 'entity_filter; }
-                if !self.silos[&type_id].contains(*e) {
-                    continue 'entity_filter;
-                }
-            }
-            ret.push(e.clone());
-        }
-
-        ret
-    }
-    
-    pub fn query_tree<Q>(&self, root: Entity, order: TreeOrder) -> Vec<Entity> where Q: TypeIds {
-        let mut ret = Vec::new();
-        for type_id in Q::type_ids() {
-            if !self.silos.contains_key(&type_id) { return ret; }
-        }
-
-        let mut filter_entity = |e| {
-            for type_id in Q::type_ids() {
-                if !self.silos[&type_id].contains(e) { return; }
-            }
-            ret.push(e);
-        };
-        match order {
-            TreeOrder::PostOrder => self.visit_post_order(root, &mut filter_entity),
-            TreeOrder::PreOrder => self.visit_pre_order(root, &mut filter_entity),
-        }
-
-        ret
+    pub fn get_container<T: 'static>(&self) -> Option<&SparseSet<T>> {
+        self.silos.get(&TypeId::of::<T>()).and_then(|x| x.as_any().downcast_ref())
     }
 
     pub fn get_container_mut<T: 'static>(&mut self) -> Option<&mut SparseSet<T>> {
-        let type_name =  std::any::type_name::<T>();
-        self.silos.get_mut(&TypeId::of::<T>())
-            .expect(format!("no container for type {type_name} in silo").as_str())
-            .as_any_mut().downcast_mut::<SparseSet<T>>()
+        self.silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
     }
 
-    pub fn get_container<T: 'static>(&self) -> Option<&SparseSet<T>> {
-        self.silos[&TypeId::of::<T>()].as_any().downcast_ref::<SparseSet<T>>()
+    pub fn get_containers_1<'a, A: IsQueryElement>(&'a mut self) -> (Option<&'a mut A::ContainerType>,) {
+        let [a,] = self.silos.get_disjoint_mut([&TypeId::of::<A::Type>(),]);
+        (a.and_then(|a| A::cast_container(a)),)
     }
 
     pub fn get_containers_2<'a, A: IsQueryElement, B: IsQueryElement>(&'a mut self)
@@ -333,14 +199,7 @@ pub struct Ecs {
             d.and_then(|d| D::cast_container(d)))
     }
 
-    pub fn get_disjoint_mut<T, const N: usize>(&mut self, entities: [Entity; N]) -> [T::Mut<'_>; N]
-    where T: TypeIds
-    {
-        let containers = T::type_ids().fetch(&mut self.silos);
-        T::containers_to_muts(containers, entities)
-    }
-
-    pub fn get<T: 'static + Clone>(&self, entity: Entity) -> Option<T> {
+    pub fn get_clone<T: 'static + Clone>(&self, entity: Entity) -> Option<T> {
         self.get_container().and_then(|x| x.get(entity.0).cloned())
     }
 
@@ -349,7 +208,7 @@ pub struct Ecs {
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(index))
     }
-    pub fn get_ref<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get_ref(entity.0) }
+    pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get_ref(entity.0) }
 
     pub fn _get_mut<T: 'static>(&mut self, index: GenerationalIndex) -> Option<&mut T> {
         let container = self.get_container_mut::<T>();
@@ -358,7 +217,7 @@ pub struct Ecs {
     pub fn get_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> { self._get_mut(entity.0) }
 
     pub fn add_child(&mut self, parent: Entity, child: Entity) {
-        assert!(self.get_ref::<Relation>(child).is_none());
+        assert!(self.get::<Relation>(child).is_none());
         let mut child_relation = Relation::new();
         child_relation.parent = Some(parent);
         self.add(child, child_relation);
@@ -369,8 +228,8 @@ pub struct Ecs {
             parent_ref.last_child = Some(child);
         } else {
             let last_child = self.get::<Relation>(parent).unwrap().last_child.unwrap();
-            self.get::<Relation>(child).unwrap().prev_sibling = Some(last_child);
-            self.get::<Relation>(last_child).unwrap().next_sibling = Some(child);
+            self.get_clone::<Relation>(child).unwrap().prev_sibling = Some(last_child);
+            self.get_clone::<Relation>(last_child).unwrap().next_sibling = Some(child);
             self.get_mut::<Relation>(parent).unwrap().last_child = Some(child);
         }
     }
@@ -383,25 +242,6 @@ pub struct Ecs {
                 ret.push(child);
                 iter = self.get::<Relation>(child).unwrap().next_sibling;
             } else { break ret; }
-        }
-    }
-
-    pub fn visit_parent_child<Q>(
-        &mut self,
-        root: Entity,
-        closure: &mut impl for<'a> FnMut(Q::Ref<'a>, Q::Mut<'a>),
-    )
-    where
-        Q: TypeIds,
-    {
-        let children = self.get_children(root);
-        for child_handle in children {
-            let [parent, child] = self.get_disjoint_mut::<Q, _>([
-                Entity::from(root.index()),
-                Entity::from(child_handle.index()),
-            ]);
-            closure(parent.downgrade(), child);
-            self.visit_parent_child::<Q>(child_handle, closure);
         }
     }
 
@@ -444,46 +284,6 @@ impl<T: DynResource> Index<Res<T>> for Ecs {
 impl<T: DynResource> IndexMut<Res<T>> for Ecs {
     fn index_mut(&mut self, _index: Res<T>) -> &mut Self::Output {
         self.get_resource_mut::<T>()
-    }
-}
-
-pub trait System<Params> {
-    fn call(self, ecs: &mut Ecs);
-}
-
-impl<F, A> System<(A,)> for F 
-    where A: IsQueryElement, F: Fn(A) + for<'b> Fn(A::Item<'b>)
-{
-    fn call(self, ecs: &mut Ecs) {
-        let Some(container) = A::typed_container(ecs) else {
-            return;
-        };
-        for item in container.components_mut() {
-            (self)(A::convert(item));
-        }
-    }
-}
-
-impl<F, A, B> System<(A, B)> for F 
-    where F: Fn(A, B) + for <'b> Fn(A::Item<'b>, B::Item<'b>), A: IsQueryElement, B: IsQueryElement,
-{
-    fn call(self, ecs: &mut Ecs) {
-        let (Some(container_a), Some(container_b)) = ecs.get_containers_2::<A, B>()
-        else { return };
-
-        if container_a.len() < container_b.len() {
-            for (ett, component) in container_a.entities_components_mut() {
-                if let Some(component_b) = container_b.get_mut(ett) {
-                    (self)(A::convert(component), B::convert(component_b));
-                }
-            }
-        } else {
-            for (ett, component) in container_b.entities_components_mut() {
-                if let Some(component_a) = container_a.get_mut(ett) {
-                    (self)(A::convert(component_a), B::convert(component));
-                }
-            }
-        }
     }
 }
 
