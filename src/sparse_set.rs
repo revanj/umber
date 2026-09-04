@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, ptr::NonNull};
-
 use rj::AsAny;
-
 use crate::Entity;
+use crate::EcsContainer;
+use crate::DynSparseSet;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub(crate) struct GenerationalIndex(u32);
@@ -280,9 +280,6 @@ impl<'a, T> IntoIterator for &'a mut SparseSet<T> {
     }
 }
 
-pub trait DynSparseSet: AsAny {
-    fn contains(&self, entity: Entity) -> bool;
-}
 
 impl<T: 'static> AsAny for SparseSet<T> {
     fn as_any(self: &Self) -> &dyn std::any::Any { self }
@@ -295,19 +292,6 @@ impl<T: 'static> DynSparseSet for SparseSet<T> {
     }
 }
 
-pub trait EcsContainer {
-    type Item;
-
-    fn len(&self) -> usize; 
-    fn entities(&self) -> impl Iterator<Item=Entity>;
-    fn get(&self, ett: Entity) -> Option<&Self::Item>;
-    fn get_mut(&mut self, ett: Entity) -> Option<&mut Self::Item>;
-    fn contains_entity(&self, ett: Entity) -> bool; 
-    fn components(&mut self) -> impl Iterator<Item=&Self::Item>; 
-    fn components_mut(&mut self) -> impl Iterator<Item=&mut Self::Item>; 
-    fn entities_components(&self) -> impl Iterator<Item=(Entity, &Self::Item)>;
-    fn entities_components_mut(&mut self) -> impl Iterator<Item=(Entity, &mut Self::Item)>;
-}
 
 
 impl<T: 'static> EcsContainer for SparseSet<T> {
