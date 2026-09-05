@@ -1,14 +1,148 @@
 pub use rj::AsAny;
 use std::any::{TypeId};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use foldhash::{HashMap, HashMapExt};
+use std::fmt::Debug;
 
 use crate::GenerationalIndex;
 use crate::SparseSet;
 use crate::IsQueryElement;
 use crate::System;
+use crate::IsQuery;
+
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct DynHandle {
+    id: GenerationalIndex,
+    type_id: TypeId,
+}
+
+impl<T: 'static> From<Handle<T>> for DynHandle {
+    fn from(value: Handle<T>) -> Self { Self { id: value.0, type_id: TypeId::of::<T>() } }
+}
+impl<T: 'static> From<&Handle<T>> for DynHandle {
+    fn from(value: &Handle<T>) -> Self { Self { id: value.0, type_id: TypeId::of::<T>() } }
+}
+
+pub struct Handle<T>(GenerationalIndex, PhantomData<T>);
+impl<T> Handle<T> {
+    pub fn new() -> Self {
+        let val = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self (GenerationalIndex::new(val, 0) , PhantomData)
+    }
+    pub fn index(&self) -> GenerationalIndex {
+	self.0
+    }
+    pub fn entity(&self) -> Entity {
+        Entity::from(self.0)
+    }
+}
+
+impl<T> From<usize> for Handle<T> {
+    fn from(value: usize) -> Self {
+        Self(GenerationalIndex::new(value as u32, 0), PhantomData)
+    }
+}
+
+impl<T> From<GenerationalIndex> for Handle<T> {
+    fn from(value: GenerationalIndex) -> Self {
+        Self(value, PhantomData)
+    }
+}
+impl<T> From<Entity> for Handle<T> {
+    fn from(value: Entity) -> Self {
+        Self { 0: value.index(), 1: PhantomData }
+    }
+}
+
+impl<T: 'static> TryFrom<DynHandle> for Handle<T> {
+    type Error = DynHandle;
+
+    fn try_from(value: DynHandle) -> Result<Self, Self::Error> {
+        if value.type_id == TypeId::of::<T>() {
+            Ok(Self(value.id, PhantomData))
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl<'a, T: 'static> TryFrom<&'a DynHandle> for Handle<T> {
+    type Error = &'a DynHandle;
+
+    fn try_from(value: &'a DynHandle) -> Result<Handle<T>, &'a DynHandle> {
+        if value.type_id == TypeId::of::<T>() {
+            Ok(Self(value.id, PhantomData))
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl<T> Clone for Handle<T> { fn clone(&self) -> Self { *self } }
+impl<T> Copy for Handle<T> {}
+
+impl<T> Eq for Handle<T> {}
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Handle<{:?}>({:?})", std::any::type_name::<T>(), self.0)
+    }
+}
+
+impl<T> Hash for Handle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+pub struct MetaHandle<T, Meta> {
+    handle: Handle<T>,
+    pub metadata: Meta,
+} impl<T, Meta> MetaHandle<T, Meta> {
+    pub fn new(metadata: Meta) -> Self {
+        Self {
+            handle: Handle::new(),
+            metadata,
+        }
+    }
+
+    pub fn handle(&self) -> &Handle<T> { &self.handle }
+}
+
+impl<T, Meta: Clone> Clone for MetaHandle<T, Meta> {
+    fn clone(&self) -> Self { Self{ handle: self.handle, metadata: self.metadata.clone() } }}
+impl<T, Meta: Copy> Copy for MetaHandle<T, Meta> {}
+
+impl<T, Meta: Eq> Eq for MetaHandle<T, Meta> {}
+impl<T, Meta: PartialEq> PartialEq for MetaHandle<T, Meta> {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata == other.metadata &&
+        self.handle.0 == other.handle.0
+    }}
+
+impl<T, Meta: Debug> Debug for MetaHandle<T, Meta> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MetaHandle<{:?}, {:?}>({}, {:?})",
+               std::any::type_name::<T>(),
+               std::any::type_name::<Meta>(),
+               self.handle.0,
+               self.metadata)
+    }
+}
+
+impl<T, Meta> Hash for MetaHandle<T, Meta> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.handle.0.hash(state);
+    }
+}
 
 pub trait DynEcsContainer: AsAny  {
     fn len(&self) -> usize; 
@@ -78,7 +212,7 @@ pub struct Res<T> {
 pub struct Ecs {
     resources: HashMap<TypeId, Box<dyn DynResource>>,
     entities: Vec<Entity>,
-    pub silos: HashMap<TypeId, Box<dyn DynEcsContainer>>
+    silos: HashMap<TypeId, Box<dyn DynEcsContainer>>
 } impl Ecs {
     pub fn new() -> Self { Self { 
         resources: HashMap::new(),
@@ -122,7 +256,7 @@ pub struct Ecs {
         typed_res
     }
 
-    pub fn add<T: 'static>(&mut self, entity: Entity, component: T) {
+    pub fn add<T: 'static>(&mut self, entity: Entity, component: T) -> Handle<T> {
         let type_name = std::any::type_name::<T>();
 
         if let Some(dyn_map) = self.silos.get_mut(&TypeId::of::<T>()) {
@@ -137,6 +271,8 @@ pub struct Ecs {
             new_map.insert(entity.0, component);
             self.silos.insert(TypeId::of::<T>(), Box::new(new_map));
         }
+
+        Handle::from(entity)
     }
 
     pub fn get_container<T: 'static>(&self) -> Option<&SparseSet<T>> {
@@ -202,19 +338,64 @@ pub struct Ecs {
     pub fn get_clone<T: 'static + Clone>(&self, entity: Entity) -> Option<T> {
         self.get_container().and_then(|x| x.get(entity.0).cloned())
     }
+    pub fn get_typed_clone<T: 'static + Clone>(&self, handle: Handle<T>) -> Option<T> {
+        self.silos[&TypeId::of::<T>()]
+            .as_any().downcast_ref::<SparseSet<T>>()
+            .and_then(|x| x.get(handle.index()).cloned())
+    }
 
-    fn _get_ref<T: 'static>(&self, index: GenerationalIndex) -> Option<&T> {
+    fn _get<T: 'static>(&self, index: GenerationalIndex) -> Option<&T> {
         self.silos[&TypeId::of::<T>()]
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(index))
     }
-    pub(crate) fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get_ref(entity.0) }
+    pub(crate) fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get(entity.0) }
+    pub fn get_typed<T: 'static>(&self, handle: Handle<T>) -> Option<&T> { self._get(handle.index()) }
 
+    
     pub(crate) fn _get_mut<T: 'static>(&mut self, index: GenerationalIndex) -> Option<&mut T> {
         let container = self.get_container_mut::<T>();
         container.and_then(|x| x.get_mut(index))
     }
     pub fn get_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> { self._get_mut(entity.0) }
+    pub fn get_typed_mut<T: 'static>(&mut self, handle: Handle<T>) -> Option<&mut T> { self._get_mut(handle.index()) }
+
+
+    pub fn query<Q: IsQuery>(&self) -> Vec<Entity> {
+        let mut ret = Vec::new();
+    'entity_filter:
+        for e in &self.entities {
+            for type_id in Q::type_ids() {
+                if !self.silos.contains_key(&type_id) { continue 'entity_filter; }
+                if !self.silos[&type_id].contains_entity(*e) {
+                    continue 'entity_filter;
+                }
+            }
+            ret.push(e.clone());
+        }
+
+        ret
+    }
+    
+    pub fn query_tree<Q: IsQuery>(&self, root: Entity, order: TreeOrder) -> Vec<Entity> {
+        let mut ret = Vec::new();
+        for type_id in Q::type_ids() {
+            if !self.silos.contains_key(&type_id) { return ret; }
+        }
+
+        let mut filter_entity = |e| {
+            for type_id in Q::type_ids() {
+                if !self.silos[&type_id].contains_entity(e) { return; }
+            }
+            ret.push(e);
+        };
+        match order {
+            TreeOrder::PostOrder => self.visit_post_order(root, &mut filter_entity),
+            TreeOrder::PreOrder => self.visit_pre_order(root, &mut filter_entity),
+        }
+
+        ret
+    }
 
     pub fn add_child(&mut self, parent: Entity, child: Entity) {
         assert!(self.get::<Relation>(child).is_none());
@@ -274,6 +455,19 @@ pub struct Ecs {
     }
 }
 
+impl<T: 'static> Index<Handle<T>> for Ecs {
+    type Output = T;
+    fn index(&self, index: Handle<T>) -> &Self::Output {
+        self.get_typed(index).unwrap()
+    }
+}
+
+impl<T: 'static> IndexMut<Handle<T>> for Ecs {
+    fn index_mut(&mut self, index: Handle<T>) -> &mut Self::Output {
+        self.get_typed_mut(index).unwrap()
+    }
+}
+
 impl<T: DynResource> Index<Res<T>> for Ecs {
     type Output = T;
     fn index(&self, _index: Res<T>) -> &Self::Output {
@@ -286,7 +480,6 @@ impl<T: DynResource> IndexMut<Res<T>> for Ecs {
         self.get_resource_mut::<T>()
     }
 }
-
 
 
 #[cfg(test)]

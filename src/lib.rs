@@ -8,8 +8,10 @@ use sparse_set::GenerationalIndex;
 use ecs::DynEcsContainer;
 use ecs::EcsContainer;
 
+use query::System;
+
 pub use ecs::Entity;
 pub use ecs::Ecs;
 pub use query::IsQueryElement;
+pub use query::IsQuery;
 
-use query::System;
