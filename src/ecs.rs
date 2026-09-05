@@ -11,6 +11,8 @@ use crate::SparseSet;
 use crate::IsQueryElement;
 use crate::System;
 use crate::IsQuery;
+use crate::TypeIdArray;
+use crate::Downgrade;
 
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -245,6 +247,17 @@ pub struct Ecs {
         typed_res
     }
 
+    pub fn get_resource_clone<T: DynResource + Clone>(&self) -> T {
+        let type_name = std::any::type_name::<T>();
+
+        let dyn_res = self.resources.get(&TypeId::of::<T>())
+            .expect("invald resource handle");
+        let typed_res = dyn_res.as_any().downcast_ref::<T>()
+            .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
+
+        typed_res.clone()
+    }
+
     pub fn get_resource_mut<T: DynResource>(&mut self) -> &mut T {
         let type_name = std::any::type_name::<T>();
 
@@ -349,7 +362,7 @@ pub struct Ecs {
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(index))
     }
-    pub(crate) fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get(entity.0) }
+    pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> { self._get(entity.0) }
     pub fn get_typed<T: 'static>(&self, handle: Handle<T>) -> Option<&T> { self._get(handle.index()) }
 
     
@@ -409,8 +422,8 @@ pub struct Ecs {
             parent_ref.last_child = Some(child);
         } else {
             let last_child = self.get::<Relation>(parent).unwrap().last_child.unwrap();
-            self.get_clone::<Relation>(child).unwrap().prev_sibling = Some(last_child);
-            self.get_clone::<Relation>(last_child).unwrap().next_sibling = Some(child);
+            self.get_mut::<Relation>(child).unwrap().prev_sibling = Some(last_child);
+            self.get_mut::<Relation>(last_child).unwrap().next_sibling = Some(child);
             self.get_mut::<Relation>(parent).unwrap().last_child = Some(child);
         }
     }
@@ -423,6 +436,30 @@ pub struct Ecs {
                 ret.push(child);
                 iter = self.get::<Relation>(child).unwrap().next_sibling;
             } else { break ret; }
+        }
+    }
+
+    pub fn get_disjoint_mut<T, const N: usize>(&mut self, entities: [Entity; N]) -> [T::Mut<'_>; N]
+    where T: IsQuery 
+    {
+        let containers = T::type_ids().fetch(&mut self.silos);
+        T::containers_to_muts(containers, entities)
+    }
+
+    pub fn visit_parent_child<Q: IsQuery>(
+        &mut self,
+        root: Entity,
+        closure: &mut impl for<'a> FnMut(Q::Ref<'a>, Q::Mut<'a>),
+    )
+    {
+        let children = self.get_children(root);
+        for child_handle in children {
+            let [parent, child] = self.get_disjoint_mut::<Q, _>([
+                root,
+                child_handle,
+            ]);
+            closure(parent.downgrade(), child);
+            self.visit_parent_child::<Q>(child_handle, closure);
         }
     }
 

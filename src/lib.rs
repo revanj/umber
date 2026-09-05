@@ -9,9 +9,17 @@ use ecs::DynEcsContainer;
 use ecs::EcsContainer;
 
 use query::System;
+use query::TypeIdArray;
+use query::Downgrade;
 
 pub use ecs::Entity;
 pub use ecs::Ecs;
+pub use ecs::Relation;
+pub use ecs::Handle;
+pub use ecs::MetaHandle;
+pub use ecs::DynHandle;
+pub use ecs::TreeOrder;
+pub use ecs::Res;
+
 pub use query::IsQueryElement;
 pub use query::IsQuery;
-

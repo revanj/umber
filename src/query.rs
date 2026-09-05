@@ -3,7 +3,33 @@ use crate::Ecs;
 use crate::EcsContainer;
 use crate::DynEcsContainer;
 use crate::SparseSet;
+use crate::Entity;
+use crate::sparse_set::GenerationalIndex;
 use foldhash::HashMap;
+
+pub trait Downgrade {
+    type Ref;
+    fn downgrade(self) -> Self::Ref;
+}
+
+#[macro_export]
+macro_rules! impl_downgrade {
+    ($($t:ident),+) => {
+        #[allow(non_snake_case)]
+        impl<'a, $($t: 'a),+> Downgrade for ($(&'a mut $t,)+) {
+            type Ref = ($(&'a $t,)+);
+            fn downgrade(self) -> Self::Ref {
+                let ($($t,)+) = self;
+                let out: Self::Ref = ($($t,)+);
+                out
+            }
+        }
+    };
+}
+
+impl_downgrade!(A);
+impl_downgrade!(A, B);
+impl_downgrade!(A, B, C);
 
 pub trait TypeIdArray {
     type Containers<'a>;
@@ -18,25 +44,115 @@ impl<const M: usize> TypeIdArray for [TypeId; M] {
 }
 
 pub trait IsQuery {
+    type Ref<'a>;
+    type Mut<'a>: Downgrade<Ref = Self::Ref<'a>>;
     type Ids: TypeIdArray + IntoIterator<Item=TypeId>;
     fn type_ids() -> Self::Ids;
+    fn containers_to_muts<'a, const N: usize>(
+        containers: <Self::Ids as TypeIdArray>::Containers<'a>,
+        entities: [Entity; N],
+    ) -> [Self::Mut<'a>; N];
+
 }
 impl<A: 'static> IsQuery for (A,) {
+    type Ref<'a> = (&'a A,);
+    type Mut<'a> = (&'a mut A,);
     type Ids = [TypeId; 1];
     fn type_ids() -> Self::Ids {
         [TypeId::of::<A>()]
     }
+    fn containers_to_muts<'a, const N: usize>(
+        containers: <Self::Ids as TypeIdArray>::Containers<'a>,
+        entities: [Entity; N],
+    ) -> [Self::Mut<'a>; N] {
+        let rows: [GenerationalIndex; N] = ::std::array::from_fn(|i| entities[i].index());
+        let mut it = containers.into_iter();
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<A>>()
+                .expect("component type mismatch");
+
+        let mut a: [Option<&'a mut A>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+        std::array::from_fn(|i| (a[i].take().unwrap(),))
+    }
 }
 impl<A: 'static, B: 'static> IsQuery for (A, B) {
+    type Ref<'a> = (&'a A,&'a B);
+    type Mut<'a> = (&'a mut A,&'a mut B);
     type Ids = [TypeId; 2];
     fn type_ids() -> Self::Ids {
         [TypeId::of::<A>(), TypeId::of::<B>()]
     }
+    fn containers_to_muts<'a, const N: usize>(
+        containers: <Self::Ids as TypeIdArray>::Containers<'a>,
+        entities: [Entity; N],
+    ) -> [Self::Mut<'a>; N] {
+        let rows: [GenerationalIndex; N] = ::std::array::from_fn(|i| entities[i].index());
+        let mut it = containers.into_iter();
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<A>>()
+                .expect("component type mismatch");
+
+        let mut a: [Option<&'a mut A>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<B>>()
+                .expect("component type mismatch");
+        let mut b: [Option<&'a mut B>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+        std::array::from_fn(|i| (a[i].take().unwrap(),b[i].take().unwrap()))
+    }
+
 }
 impl<A: 'static, B: 'static, C: 'static> IsQuery for (A, B, C) {
+    type Ref<'a> = (&'a A,&'a B,&'a C);
+    type Mut<'a> = (&'a mut A,&'a mut B, &'a mut C);
     type Ids = [TypeId; 3];
     fn type_ids() -> Self::Ids {
         [TypeId::of::<A>(), TypeId::of::<B>(), TypeId::of::<C>()]
+    }
+    fn containers_to_muts<'a, const N: usize>(
+        containers: <Self::Ids as TypeIdArray>::Containers<'a>,
+        entities: [Entity; N],
+    ) -> [Self::Mut<'a>; N] {
+        let rows: [GenerationalIndex; N] = ::std::array::from_fn(|i| entities[i].index());
+        let mut it = containers.into_iter();
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<A>>()
+                .expect("component type mismatch");
+
+        let mut a: [Option<&'a mut A>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<B>>()
+                .expect("component type mismatch");
+        let mut b: [Option<&'a mut B>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+        let set = it.next()
+            .expect("too few containers")
+            .as_any_mut()
+                .downcast_mut::<SparseSet<C>>()
+                .expect("component type mismatch");
+        let mut c: [Option<&'a mut C>; N] =
+            set.get_disjoint_mut(rows).map(Some);
+
+
+        std::array::from_fn(|i| (a[i].take().unwrap(),b[i].take().unwrap(), c[i].take().unwrap()))
     }
 }
 
