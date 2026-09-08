@@ -487,7 +487,7 @@ pub struct Ecs {
         }
     }
 
-    pub fn exec<Params, H: System<Params>>(&mut self, system: H) {
+    pub fn exec<Params, H: System<Params>>(&mut self, mut system: H) {
         system.call(self);
     }
 }

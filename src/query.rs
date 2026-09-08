@@ -209,13 +209,13 @@ impl<'a, T> IsQueryElement for &'a mut T where T: 'static {
 }
 
 pub trait System<Params> {
-    fn call(self, ecs: &mut Ecs);
+    fn call(&mut self, ecs: &mut Ecs);
 }
 
 impl<F, A> System<(A,)> for F 
-    where A: IsQueryElement, F: Fn(A) + for<'b> Fn(A::Item<'b>)
+    where A: IsQueryElement, F: FnMut(A) + for<'b> FnMut(A::Item<'b>)
 {
-    fn call(self, ecs: &mut Ecs) {
+    fn call(&mut self, ecs: &mut Ecs) {
         let Some(container) = A::typed_container(ecs) else {
             return;
         };
@@ -226,9 +226,9 @@ impl<F, A> System<(A,)> for F
 }
 
 impl<F, A, B> System<(A, B)> for F 
-    where F: Fn(A, B) + for <'b> Fn(A::Item<'b>, B::Item<'b>), A: IsQueryElement, B: IsQueryElement,
+    where F: FnMut(A, B) + for <'b> FnMut(A::Item<'b>, B::Item<'b>), A: IsQueryElement, B: IsQueryElement,
 {
-    fn call(self, ecs: &mut Ecs) {
+    fn call(&mut self, ecs: &mut Ecs) {
         let (Some(container_a), Some(container_b)) = ecs.get_containers_2::<A, B>()
         else { return };
 
@@ -250,10 +250,10 @@ impl<F, A, B> System<(A, B)> for F
 
 
 impl<F, A, B, C> System<(A, B, C)> for F 
-    where F: Fn(A, B, C) + for <'b> Fn(A::Item<'b>, B::Item<'b>, C::Item<'b>), 
+    where F: FnMut(A, B, C) + for <'b> FnMut(A::Item<'b>, B::Item<'b>, C::Item<'b>), 
         A: IsQueryElement, B: IsQueryElement, C: IsQueryElement
 {
-    fn call(self, ecs: &mut Ecs) {
+    fn call(&mut self, ecs: &mut Ecs) {
         let (Some(container_a), Some(container_b), Some(container_c)) = ecs.get_containers_3::<A, B, C>()
         else { return };
         
