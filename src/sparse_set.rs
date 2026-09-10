@@ -1,3 +1,4 @@
+use std::mem::{self, MaybeUninit};
 use std::{marker::PhantomData, ptr::NonNull};
 use rj::AsAny;
 use crate::Entity;
@@ -19,7 +20,7 @@ impl GenerationalIndex {
     }
 
     pub fn null() -> Self {
-	Self::new(0xFFFFF, 0xFFF)
+	    Self::new(0xFFFFF, 0xFFF)
     }
 
     pub fn index(&self) -> usize { (self.0 & 0xFFFFF) as usize }
@@ -32,18 +33,23 @@ impl std::fmt::Display for GenerationalIndex {
 	    write!(f, "(Generation {}, ID {})", self.generation(), self.index_32())
     }
 }
+impl Default for GenerationalIndex {
+    fn default() -> Self {
+        Self::null()
+    }
+}
 
 
 pub struct SparseSet<T> {
     sparse: Vec<GenerationalIndex>,
-    dense: Vec<(GenerationalIndex, T)>,
+    dense: Vec<(GenerationalIndex, MaybeUninit<T>)>,
     total: usize,
 } impl<T> SparseSet<T> {
     pub fn new() -> Self { Self { sparse: Vec::new(), dense: Vec::new(), total: 0 }}
 
     pub(crate) fn insert(&mut self, index: GenerationalIndex, value: T) {
 	    let dense_location = self.dense.len();
-	    self.dense.push((index, value));
+	    self.dense.push((index, MaybeUninit::new(value)));
 
 	    let sparse_location = index.index() as usize;
 
@@ -54,6 +60,21 @@ pub struct SparseSet<T> {
 	    }
 	    self.sparse[sparse_location] = GenerationalIndex::new(dense_location as u32, index.generation());
 	    self.total += 1;
+    }
+
+    pub fn remove(&mut self, index: GenerationalIndex) {
+        if !self.contains(index) { return; }
+
+        let sparse_index = index.index();
+        let dense_index = self.sparse[sparse_index];
+        let dense_location = dense_index.index();
+        let last_element = mem::replace(
+                &mut self.dense[self.total-1], 
+                (GenerationalIndex::null(), MaybeUninit::uninit()));
+        self.sparse[last_element.0.index()] = 
+            GenerationalIndex::new(dense_index.index_32(), last_element.0.generation());
+        self.dense[dense_location] = last_element;
+        self.total -= 1;
     }
 
     fn contains(&self, index: GenerationalIndex) -> bool {

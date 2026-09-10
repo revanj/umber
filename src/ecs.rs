@@ -288,6 +288,22 @@ pub struct Ecs {
         Handle::from(entity)
     }
 
+    pub fn remove<T: 'static>(&mut self, entity: Entity) {
+        let type_name = std::any::type_name::<T>();
+
+        if let Some(dyn_map) = self.silos.get_mut(&TypeId::of::<T>()) {
+            let typed_map = dyn_map
+                .as_any_mut()
+                .downcast_mut::<SparseSet<T>>()
+                .expect(format!("failed to cast dyn container to container of type {type_name}").as_str());
+
+            typed_map.remove(entity.0);
+        } 
+    }
+    pub fn remove_typed<T: 'static>(&mut self, handle: Handle<T>) {
+        self.remove::<T>(handle.entity());
+    }
+
     pub fn get_container<T: 'static>(&self) -> Option<&SparseSet<T>> {
         self.silos.get(&TypeId::of::<T>()).and_then(|x| x.as_any().downcast_ref())
     }
