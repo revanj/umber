@@ -6,7 +6,7 @@ use crate::EcsContainer;
 use crate::DynEcsContainer;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
-pub(crate) struct GenerationalIndex(u32);
+pub struct GenerationalIndex(u32);
 impl GenerationalIndex {
     pub fn new(idx: u32, generation: u16) -> Self {
         let idx_top_12_bits = 0xFFF00000 & idx;
@@ -81,7 +81,6 @@ pub struct SparseSet<T> {
         let last_element = mem::replace(
                 &mut self.dense[self.total-1], 
                 (GenerationalIndex::null(), MaybeUninit::uninit()));
-        println!("self.total is {}, last element has index of {}", self.total, last_element.0);
         self.sparse[last_element.0.index()] = 
             GenerationalIndex::new(dense_index.index_32(), last_element.0.generation());
         self.dense[dense_location] = last_element;
