@@ -48,8 +48,18 @@ pub struct SparseSet<T> {
     pub fn new() -> Self { Self { sparse: Vec::new(), dense: Vec::new(), total: 0 }}
 
     pub(crate) fn insert(&mut self, index: GenerationalIndex, value: T) {
-	    let dense_location = self.dense.len();
-	    self.dense.push((index, MaybeUninit::new(value)));
+        if self.contains(index) {
+            unsafe {*self.dense[self.sparse[index.index()].index()].1.assume_init_mut() = value};
+            return;
+        }
+        let dense_location = self.total;
+        assert!(self.dense.len() >= dense_location);
+        if dense_location >= self.dense.len() {
+	        self.dense.push((index, MaybeUninit::new(value)));
+        } else {
+            self.dense[dense_location].0 = index;
+            unsafe {*self.dense[dense_location].1.assume_init_mut() = value};
+        }
 
 	    let sparse_location = index.index() as usize;
 
@@ -71,6 +81,7 @@ pub struct SparseSet<T> {
         let last_element = mem::replace(
                 &mut self.dense[self.total-1], 
                 (GenerationalIndex::null(), MaybeUninit::uninit()));
+        println!("self.total is {}, last element has index of {}", self.total, last_element.0);
         self.sparse[last_element.0.index()] = 
             GenerationalIndex::new(dense_index.index_32(), last_element.0.generation());
         self.dense[dense_location] = last_element;
@@ -78,6 +89,7 @@ pub struct SparseSet<T> {
     }
 
     fn contains(&self, index: GenerationalIndex) -> bool {
+        if self.total == 0 { return false; }
         let sparse_index = index.index();
         if self.sparse.len() <= sparse_index { return false; }
         let dense_index = self.sparse[sparse_index];
@@ -89,28 +101,28 @@ pub struct SparseSet<T> {
         true
     }
 
-    fn get_unchecked(&self, index: GenerationalIndex) -> &T {
+    unsafe fn get_unchecked(&self, index: GenerationalIndex) -> &T {
         let sparse_index = index.index();
         let dense_index = self.sparse[sparse_index].index();
 
-        &self.dense[dense_index].1
+        unsafe {self.dense[dense_index].1.assume_init_ref()}
     }
 
-    fn get_mut_unchecked(&mut self, index: GenerationalIndex) -> &mut T {
+    unsafe fn get_mut_unchecked(&mut self, index: GenerationalIndex) -> &mut T {
         let sparse_index = index.index();
         let dense_index = self.sparse[sparse_index].index();
 
-        &mut self.dense[dense_index].1
+        unsafe {self.dense[dense_index].1.assume_init_mut()}
     }
 
     pub(crate) fn get(&self, index: GenerationalIndex) -> Option<&T> {
         if !self.contains(index) { None }
-        else { Some(self.get_unchecked(index)) }
+        else { Some( unsafe {self.get_unchecked(index)}) }
     }
 
     pub(crate) fn get_mut(&mut self, index: GenerationalIndex) -> Option<&mut T> {
         if !self.contains(index) { None }
-        else { Some(self.get_mut_unchecked(index)) }
+        else { Some( unsafe {self.get_mut_unchecked(index)}) }
     }
 
     pub(crate) fn get_disjoint_mut<const N: usize>(&mut self, indices: [GenerationalIndex; N]) -> [&mut T; N] {
@@ -119,7 +131,7 @@ pub struct SparseSet<T> {
         let dense_indices: [&mut GenerationalIndex; N] = self.sparse.get_disjoint_mut(usize_indices).unwrap();
         for i in 0..N { usize_indices[i] = dense_indices[i].index(); }
 
-        self.dense.get_disjoint_mut(usize_indices).unwrap().map(|x| &mut x.1)
+        self.dense.get_disjoint_mut(usize_indices).unwrap().map(|x|  unsafe {x.1.assume_init_mut()})
     }
 
     pub fn len(&self) -> usize {
@@ -196,7 +208,7 @@ impl <'a, T> Iterator for EntityComponentIterator<'a, T> {
         if self.idx < self.container.len() {
             let ret = Some((
                 Entity::from(self.container.sparse[self.container.dense[self.idx].0.index()]),
-                &self.container.dense[self.idx].1
+                unsafe {self.container.dense[self.idx].1.assume_init_ref()}
             ));
             self.idx += 1;
             ret
@@ -256,7 +268,7 @@ impl<'a, T> Iterator for DenseIterator<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.container.len() {
-            let ret = Some(&self.container.dense[self.idx].1);
+            let ret = Some(unsafe {self.container.dense[self.idx].1.assume_init_ref()});
             self.idx += 1;
             ret
         } else { None }
