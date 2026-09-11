@@ -6,7 +6,7 @@ use std::ops::{Index, IndexMut};
 use foldhash::{HashMap, HashMapExt};
 use std::fmt::Debug;
 
-use crate::GenerationalIndex;
+use crate::{GenerationalIndex, SystemDyn};
 use crate::SparseSet;
 use crate::IsQueryElement;
 use crate::System;
@@ -212,14 +212,16 @@ pub struct Res<T> {
 }
 
 pub struct Ecs {
-    resources: HashMap<TypeId, Box<dyn DynResource>>,
     entities: Vec<Entity>,
-    silos: HashMap<TypeId, Box<dyn DynEcsContainer>>
+    resources: HashMap<TypeId, Box<dyn DynResource>>,
+    silos: HashMap<TypeId, Box<dyn DynEcsContainer>>,
+    entity_triggers: HashMap<Entity, HashMap<TypeId, Vec<Box<dyn SystemDyn>>>>
 } impl Ecs {
     pub fn new() -> Self { Self { 
         resources: HashMap::new(),
         entities: Vec::new(), 
         silos: HashMap::new(),
+        entity_triggers: HashMap::new()
     }}
 
     pub fn new_entity(&mut self) -> Entity {
@@ -300,6 +302,7 @@ pub struct Ecs {
             typed_map.remove(entity.0);
         } 
     }
+
     pub fn remove_typed<T: 'static>(&mut self, handle: Handle<T>) {
         self.remove::<T>(handle.entity());
     }
@@ -504,7 +507,28 @@ pub struct Ecs {
     }
 
     pub fn exec<Params, H: System<Params>>(&mut self, mut system: H) {
-        system.call(self);
+        system.call(&mut self.resources, &mut self.silos);
+    }
+
+    pub fn add_entity_trigger<Trigger: 'static, Params, S: System<Params> + SystemDyn +'static>(
+        &mut self, entity: Entity, system: S) 
+    {
+        if !self.entity_triggers.contains_key(&entity) {
+            self.entity_triggers.insert(entity, HashMap::new());
+        }
+        if !self.entity_triggers[&entity].contains_key(&TypeId::of::<Trigger>()) {
+            self.entity_triggers.get_mut(&entity).unwrap().insert(TypeId::of::<Trigger>(), Vec::new());
+        }
+        self.entity_triggers.get_mut(&entity).unwrap().get_mut(&TypeId::of::<Trigger>()).unwrap().push(Box::new(system));
+    }
+
+    pub fn entity_trigger<Trigger: 'static>(&mut self, entity: Entity, trigger: Trigger) {
+        if let Some(hash_map) = self.entity_triggers.get_mut(&entity) 
+        && let Some(systems) = hash_map.get_mut(&TypeId::of::<Trigger>()) { 
+            for s in systems {
+                s.call(&mut self.resources, &mut self.silos);
+            }
+        }
     }
 }
 

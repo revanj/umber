@@ -23,3 +23,4 @@ pub use ecs::Res;
 
 pub use query::IsQueryElement;
 pub use query::IsQuery;
+pub use query::SystemDyn;

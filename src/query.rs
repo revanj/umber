@@ -1,9 +1,11 @@
 use std::any::TypeId;
+use std::marker::PhantomData;
 use crate::Ecs;
 use crate::EcsContainer;
 use crate::DynEcsContainer;
 use crate::SparseSet;
 use crate::Entity;
+use crate::ecs::DynResource;
 use crate::sparse_set::GenerationalIndex;
 use foldhash::HashMap;
 
@@ -163,7 +165,7 @@ pub trait IsQueryElement {
     type ContainerRef<'d>: IntoIterator<Item=Self::Item<'d>>;
 
     fn cast_container(container: &mut Box<dyn DynEcsContainer>) -> Option<&mut Self::ContainerType>;
-    fn typed_container(ecs: &mut Ecs) -> Option<&mut Self::ContainerType>;
+    fn typed_container(silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>) -> Option<&mut Self::ContainerType>;
     fn convert<'c>(item: &'c mut Self::Type) -> Self::Item<'c>;
 }
 
@@ -173,9 +175,8 @@ impl<'a, T: 'static> IsQueryElement for &'a T {
     type ContainerType = SparseSet<T>;
     type ContainerRef<'d> = &'d SparseSet<T>;
 
-    fn typed_container(ecs: &mut Ecs) -> Option<&mut Self::ContainerType> {
-        let typed_container = ecs.get_container_mut::<T>();
-        typed_container
+    fn typed_container(silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>) -> Option<&mut Self::ContainerType> {
+        silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
     }
 
     fn convert<'c>(item: &'c mut Self::Type) -> Self::Item<'c> {
@@ -194,9 +195,8 @@ impl<'a, T> IsQueryElement for &'a mut T where T: 'static {
     type ContainerType = SparseSet<T>;
     type ContainerRef<'d> = &'d mut SparseSet<T>;
 
-    fn typed_container(ecs: &mut Ecs) -> Option<&mut Self::ContainerType> {
-        let typed_container = ecs.get_container_mut::<T>();
-        typed_container
+    fn typed_container(silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>) -> Option<&mut Self::ContainerType> {
+        silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
     }
     fn convert<'c>(item: &'c mut T) -> Self::Item<'c>{
         item
@@ -208,15 +208,27 @@ impl<'a, T> IsQueryElement for &'a mut T where T: 'static {
     }
 }
 
-pub trait System<Params> {
-    fn call(&mut self, ecs: &mut Ecs);
+pub trait SystemDyn {
+    fn call(&mut self, 
+        resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>);
 }
 
-impl<F, A> System<(A,)> for F 
+pub trait System<Params> {
+    fn call(&mut self, 
+        resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>);
+
+}
+
+impl<F, A> System<fn(A,)> for F 
     where A: IsQueryElement, F: FnMut(A) + for<'b> FnMut(A::Item<'b>)
 {
-    fn call(&mut self, ecs: &mut Ecs) {
-        let Some(container) = A::typed_container(ecs) else {
+    fn call(&mut self, 
+        _resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>)
+    {
+        let Some(container) = A::typed_container(silos) else {
             return;
         };
         for item in container.components_mut() {
@@ -225,11 +237,45 @@ impl<F, A> System<(A,)> for F
     }
 }
 
-impl<F, A, B> System<(A, B)> for F 
+pub struct SystemFn<F, Params> {
+    f: F,
+    _params: PhantomData<Params>,
+}
+
+impl<F, Params> SystemDyn for SystemFn<F, Params>
+where F: System<Params>,
+{
+    fn call(&mut self, 
+        resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>) {
+        System::<Params>::call(&mut self.f, resources, silos)
+    }
+}
+
+pub trait IntoSystemDyn<Params>: Sized {
+    fn into_dyn(self) -> SystemFn<Self, Params>;
+}
+
+impl<F, Params> IntoSystemDyn<Params> for F
+where
+    F: System<Params>,
+{
+    fn into_dyn(self) -> SystemFn<Self, Params> {
+        SystemFn { f: self, _params: PhantomData }
+    }
+}
+
+impl<F, A, B> System<fn(A, B)> for F 
     where F: FnMut(A, B) + for <'b> FnMut(A::Item<'b>, B::Item<'b>), A: IsQueryElement, B: IsQueryElement,
 {
-    fn call(&mut self, ecs: &mut Ecs) {
-        let (Some(container_a), Some(container_b)) = ecs.get_containers_2::<A, B>()
+    fn call(&mut self, 
+        resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>)
+    {
+        let [a, b] = silos.get_disjoint_mut([&TypeId::of::<A::Type>(), &TypeId::of::<B::Type>()]);
+        let option_a_b = (a.and_then(|a| A::cast_container(a)), b.and_then(|b| B::cast_container(b)));
+
+        let (Some(container_a), Some(container_b)) = option_a_b 
         else { return };
 
         if container_a.len() < container_b.len() {
@@ -249,12 +295,24 @@ impl<F, A, B> System<(A, B)> for F
 }
 
 
-impl<F, A, B, C> System<(A, B, C)> for F 
+impl<F, A, B, C> System<fn(A, B, C)> for F 
     where F: FnMut(A, B, C) + for <'b> FnMut(A::Item<'b>, B::Item<'b>, C::Item<'b>), 
         A: IsQueryElement, B: IsQueryElement, C: IsQueryElement
 {
-    fn call(&mut self, ecs: &mut Ecs) {
-        let (Some(container_a), Some(container_b), Some(container_c)) = ecs.get_containers_3::<A, B, C>()
+    fn call(&mut self, 
+        resources: &mut HashMap<TypeId, Box<dyn DynResource>>,
+        silos: &mut HashMap<TypeId, Box<dyn DynEcsContainer>>)
+    {
+        let [a, b, c] = silos.get_disjoint_mut([
+            &TypeId::of::<A::Type>(), 
+            &TypeId::of::<B::Type>(), 
+            &TypeId::of::<C::Type>()]);
+
+        let abc_options = (a.and_then(|a| A::cast_container(a)), 
+            b.and_then(|b| B::cast_container(b)), 
+            c.and_then(|c| C::cast_container(c)));
+
+        let (Some(container_a), Some(container_b), Some(container_c)) = abc_options
         else { return };
         
         if container_a.len() <= container_b.len() && container_a.len() <= container_c.len() {
