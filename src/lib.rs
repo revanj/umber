@@ -1,12 +1,12 @@
-mod sparse_set;
 mod ecs;
 mod query;
+mod containers;
 
-pub use sparse_set::SparseSet;
-use sparse_set::GenerationalIndex;
+pub use containers::sparse_set::SparseSet;
+pub use containers::GenerationalIndex;
 
-use ecs::DynEcsContainer;
-use ecs::EcsContainer;
+use ecs::DynEcsEntityContainer;
+use ecs::EcsEntityContainer;
 
 use query::System;
 use query::TypeIdArray;
@@ -20,6 +20,7 @@ pub use ecs::MetaHandle;
 pub use ecs::DynHandle;
 pub use ecs::TreeOrder;
 pub use ecs::Res;
+pub use ecs::DynResource;
 
 pub use query::IsQueryElement;
 pub use query::IsQuery;

@@ -1,4 +1,5 @@
 pub use rj::AsAny;
+use rj::TypeIds;
 use std::any::{TypeId};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -146,13 +147,27 @@ impl<T, Meta> Hash for MetaHandle<T, Meta> {
     }
 }
 
-pub trait DynEcsContainer: AsAny  {
-    fn len(&self) -> usize; 
-    fn contains_entity(&self, entity: Entity) -> bool;
+pub trait DynEcsContainer: AsAny {
+    fn is_resource(&self) -> bool;
+    fn as_component(&mut self) -> Option<&mut dyn DynEcsEntityContainer>;
 }
 
 pub trait EcsContainer: DynEcsContainer {
     type Item;
+}
+
+pub trait EcsResourceContainer: EcsContainer {
+    fn get(&self) -> &Self::Item;
+    fn get_mut(&mut self) -> &mut Self::Item;
+}
+
+pub trait DynEcsEntityContainer: DynEcsContainer {
+    fn len(&self) -> usize; 
+    fn contains_entity(&self, entity: Entity) -> bool;
+    fn entities_vec(&self) -> Vec<Entity>;
+}
+
+pub trait EcsEntityContainer: DynEcsEntityContainer  + EcsContainer {
     fn entities(&self) -> impl Iterator<Item=Entity>;
     fn get(&self, ett: Entity) -> Option<&Self::Item>;
     fn get_mut(&mut self, ett: Entity) -> Option<&mut Self::Item>;
@@ -206,21 +221,85 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 pub trait DynResource: AsAny + 'static {}
 impl<T: AsAny + 'static> DynResource for T {}
 
+pub struct GlobalContainer<T> {
+    pub inner: T
+}
+
+impl<T: 'static> AsAny for GlobalContainer<T> {
+    fn as_any(self: &Self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(self: &mut Self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+impl<T: 'static> DynEcsContainer for GlobalContainer<T> {
+    fn is_resource(&self) -> bool {
+        true
+    }
+
+    fn as_component(&mut self) -> Option<&mut dyn DynEcsEntityContainer> {
+        None
+    }
+}
+
+impl<T: 'static> EcsContainer for GlobalContainer<T> {
+    type Item = T;
+}
+
+impl<T: 'static> EcsResourceContainer for GlobalContainer<T> {
+    fn get(&self) -> &Self::Item {
+        &self.inner
+    }
+
+    fn get_mut(&mut self) -> &mut Self::Item {
+        &mut self.inner
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct Res<T> {
     _phantom: PhantomData<T>
 }
 
+
+pub(crate) struct Data {
+    pub entities: Vec<Entity>,
+    pub resources: HashMap<TypeId, Box<dyn DynEcsContainer>>,
+    pub silos: HashMap<TypeId, Box<dyn DynEcsEntityContainer>>,
+} impl Data {
+    pub fn new() -> Self {
+        Self {
+            resources: HashMap::new(),
+            entities: Vec::new(), 
+            silos: HashMap::new(),
+        }
+    }
+
+    pub fn get_dyn_container_1<A: IsQueryElement>(&mut self) -> [&mut dyn DynEcsContainer; 1] {
+        let [a_silo] = self.silos.get_disjoint_mut([&TypeId::of::<A::ComponentType>()]);
+        let [a_res] = self.resources.get_disjoint_mut([&TypeId::of::<A::ResourceType>()]);
+        let a: Option<&mut dyn DynEcsContainer> =
+            match (a_silo, a_res) {
+                (None, Some(a_res)) => { Some(&mut **a_res) },
+                (Some(a_silo), None) => { Some(&mut **a_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+
+    }
+
+}
+
+
 pub struct Ecs {
-    entities: Vec<Entity>,
-    resources: HashMap<TypeId, Box<dyn DynResource>>,
-    silos: HashMap<TypeId, Box<dyn DynEcsContainer>>,
+    data: Data,
     entity_triggers: HashMap<Entity, HashMap<TypeId, Vec<Box<dyn SystemDyn>>>>
 } impl Ecs {
     pub fn new() -> Self { Self { 
-        resources: HashMap::new(),
-        entities: Vec::new(), 
-        silos: HashMap::new(),
+        data: Data::new(),
         entity_triggers: HashMap::new()
     }}
 
@@ -229,19 +308,19 @@ pub struct Ecs {
             GenerationalIndex::new(
                 COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst), 0));
 
-       self.entities.push(ett);
+       self.data.entities.push(ett);
        ett
     }
 
     pub fn add_resource<T: DynResource>(&mut self, value: T) -> Res<T> {
-        self.resources.insert(TypeId::of::<T>(), Box::new(value));
+        self.data.resources.insert(TypeId::of::<T>(), Box::new(value));
         Res { _phantom: PhantomData }
     }
     
     pub fn get_resource<T: DynResource>(&self) -> &T {
         let type_name = std::any::type_name::<T>();
 
-        let dyn_res = self.resources.get(&TypeId::of::<T>())
+        let dyn_res = self.data.resources.get(&TypeId::of::<T>())
             .expect("invald resource handle");
         let typed_res = dyn_res.as_any().downcast_ref::<T>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
@@ -252,7 +331,7 @@ pub struct Ecs {
     pub fn get_resource_clone<T: DynResource + Clone>(&self) -> T {
         let type_name = std::any::type_name::<T>();
 
-        let dyn_res = self.resources.get(&TypeId::of::<T>())
+        let dyn_res = self.data.resources.get(&TypeId::of::<T>())
             .expect("invald resource handle");
         let typed_res = dyn_res.as_any().downcast_ref::<T>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
@@ -263,7 +342,7 @@ pub struct Ecs {
     pub fn get_resource_mut<T: DynResource>(&mut self) -> &mut T {
         let type_name = std::any::type_name::<T>();
 
-        let dyn_res = self.resources.get_mut(&TypeId::of::<T>())
+        let dyn_res = self.data.resources.get_mut(&TypeId::of::<T>())
             .expect("invald resource handle");
         let typed_res = dyn_res.as_any_mut().downcast_mut::<T>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
@@ -274,7 +353,7 @@ pub struct Ecs {
     pub fn add<T: 'static>(&mut self, entity: Entity, component: T) -> Handle<T> {
         let type_name = std::any::type_name::<T>();
 
-        if let Some(dyn_map) = self.silos.get_mut(&TypeId::of::<T>()) {
+        if let Some(dyn_map) = self.data.silos.get_mut(&TypeId::of::<T>()) {
             let typed_map = dyn_map
                 .as_any_mut()
                 .downcast_mut::<SparseSet<T>>()
@@ -284,7 +363,7 @@ pub struct Ecs {
         } else {
             let mut new_map = SparseSet::<T>::new();
             new_map.insert(entity.0, component);
-            self.silos.insert(TypeId::of::<T>(), Box::new(new_map));
+            self.data.silos.insert(TypeId::of::<T>(), Box::new(new_map));
         }
 
         Handle::from(entity)
@@ -293,7 +372,7 @@ pub struct Ecs {
     pub fn remove<T: 'static>(&mut self, entity: Entity) {
         let type_name = std::any::type_name::<T>();
 
-        if let Some(dyn_map) = self.silos.get_mut(&TypeId::of::<T>()) {
+        if let Some(dyn_map) = self.data.silos.get_mut(&TypeId::of::<T>()) {
             let typed_map = dyn_map
                 .as_any_mut()
                 .downcast_mut::<SparseSet<T>>()
@@ -308,22 +387,22 @@ pub struct Ecs {
     }
 
     pub fn get_container<T: 'static>(&self) -> Option<&SparseSet<T>> {
-        self.silos.get(&TypeId::of::<T>()).and_then(|x| x.as_any().downcast_ref())
+        self.data.silos.get(&TypeId::of::<T>()).and_then(|x| x.as_any().downcast_ref())
     }
 
     pub fn get_container_mut<T: 'static>(&mut self) -> Option<&mut SparseSet<T>> {
-        self.silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
+        self.data.silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
     }
 
-    pub fn get_containers_1<'a, A: IsQueryElement>(&'a mut self) -> (Option<&'a mut A::ContainerType>,) {
-        let [a,] = self.silos.get_disjoint_mut([&TypeId::of::<A::Type>(),]);
+    pub fn get_containers_1<'a, A: IsQueryElement>(&'a mut self) -> (Option<&'a mut A::ComponentContainerType>,) {
+        let [a,] = self.data.silos.get_disjoint_mut([&TypeId::of::<A::Type>(),]);
         (a.and_then(|a| A::cast_container(a)),)
     }
 
     pub fn get_containers_2<'a, A: IsQueryElement, B: IsQueryElement>(&'a mut self)
-        -> (Option<&'a mut A::ContainerType>, Option<&'a mut B::ContainerType>) 
+        -> (Option<&'a mut A::ComponentContainerType>, Option<&'a mut B::ComponentContainerType>) 
     {
-        let [a, b] = self.silos.get_disjoint_mut([&TypeId::of::<A::Type>(), &TypeId::of::<B::Type>()]);
+        let [a, b] = self.data.silos.get_disjoint_mut([&TypeId::of::<A::Type>(), &TypeId::of::<B::Type>()]);
         (a.and_then(|a| A::cast_container(a)), b.and_then(|b| B::cast_container(b)))
     }
 
@@ -331,11 +410,11 @@ pub struct Ecs {
         A: IsQueryElement, 
         B: IsQueryElement,
         C: IsQueryElement>(&'a mut self) -> (
-            Option<&'a mut A::ContainerType>, 
-            Option<&'a mut B::ContainerType>, 
-            Option<&'a mut C::ContainerType>) 
+            Option<&'a mut A::ComponentContainerType>, 
+            Option<&'a mut B::ComponentContainerType>, 
+            Option<&'a mut C::ComponentContainerType>) 
     {
-        let [a, b, c] = self.silos.get_disjoint_mut([
+        let [a, b, c] = self.data.silos.get_disjoint_mut([
             &TypeId::of::<A::Type>(), 
             &TypeId::of::<B::Type>(), 
             &TypeId::of::<C::Type>()]);
@@ -350,12 +429,12 @@ pub struct Ecs {
         B: IsQueryElement,
         C: IsQueryElement,
         D: IsQueryElement>(&'a mut self) -> (
-            Option<&'a mut A::ContainerType>, 
-            Option<&'a mut B::ContainerType>, 
-            Option<&'a mut C::ContainerType>, 
-            Option<&'a mut D::ContainerType>) 
+            Option<&'a mut A::ComponentContainerType>, 
+            Option<&'a mut B::ComponentContainerType>, 
+            Option<&'a mut C::ComponentContainerType>, 
+            Option<&'a mut D::ComponentContainerType>) 
     {
-        let [a, b, c, d] = self.silos.get_disjoint_mut([
+        let [a, b, c, d] = self.data.silos.get_disjoint_mut([
             &TypeId::of::<A::Type>(), 
             &TypeId::of::<B::Type>(), 
             &TypeId::of::<C::Type>(),
@@ -371,13 +450,13 @@ pub struct Ecs {
         self.get_container().and_then(|x| x.get(entity.0).cloned())
     }
     pub fn get_typed_clone<T: 'static + Clone>(&self, handle: Handle<T>) -> Option<T> {
-        self.silos[&TypeId::of::<T>()]
+        self.data.silos[&TypeId::of::<T>()]
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(handle.index()).cloned())
     }
 
     fn _get<T: 'static>(&self, index: GenerationalIndex) -> Option<&T> {
-        self.silos[&TypeId::of::<T>()]
+        self.data.silos[&TypeId::of::<T>()]
             .as_any().downcast_ref::<SparseSet<T>>()
             .and_then(|x| x.get(index))
     }
@@ -396,10 +475,10 @@ pub struct Ecs {
     pub fn query<Q: IsQuery>(&self) -> Vec<Entity> {
         let mut ret = Vec::new();
     'entity_filter:
-        for e in &self.entities {
+        for e in &self.data.entities {
             for type_id in Q::type_ids() {
-                if !self.silos.contains_key(&type_id) { continue 'entity_filter; }
-                if !self.silos[&type_id].contains_entity(*e) {
+                if !self.data.silos.contains_key(&type_id) { continue 'entity_filter; }
+                if !self.data.silos[&type_id].contains_entity(*e) {
                     continue 'entity_filter;
                 }
             }
@@ -412,12 +491,12 @@ pub struct Ecs {
     pub fn query_tree<Q: IsQuery>(&self, root: Entity, order: TreeOrder) -> Vec<Entity> {
         let mut ret = Vec::new();
         for type_id in Q::type_ids() {
-            if !self.silos.contains_key(&type_id) { return ret; }
+            if !self.data.silos.contains_key(&type_id) { return ret; }
         }
 
         let mut filter_entity = |e| {
             for type_id in Q::type_ids() {
-                if !self.silos[&type_id].contains_entity(e) { return; }
+                if !self.data.silos[&type_id].contains_entity(e) { return; }
             }
             ret.push(e);
         };
@@ -461,7 +540,7 @@ pub struct Ecs {
     pub fn get_disjoint_mut<T, const N: usize>(&mut self, entities: [Entity; N]) -> [T::Mut<'_>; N]
     where T: IsQuery 
     {
-        let containers = T::type_ids().fetch(&mut self.silos);
+        let containers = T::type_ids().fetch(&mut self.data.silos);
         T::containers_to_muts(containers, entities)
     }
 
@@ -507,7 +586,7 @@ pub struct Ecs {
     }
 
     pub fn exec<Params, H: System<Params>>(&mut self, mut system: H) {
-        system.call(&mut self.resources, &mut self.silos);
+        system.call(&mut self.data);
     }
 
     pub fn add_entity_trigger<Trigger: 'static, Params, S: System<Params> + SystemDyn +'static>(
@@ -526,7 +605,7 @@ pub struct Ecs {
         if let Some(hash_map) = self.entity_triggers.get_mut(&entity) 
         && let Some(systems) = hash_map.get_mut(&TypeId::of::<Trigger>()) { 
             for s in systems {
-                s.call(&mut self.resources, &mut self.silos);
+                s.call(&mut self.data);
             }
         }
     }
