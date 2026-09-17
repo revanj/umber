@@ -223,6 +223,10 @@ impl<T: AsAny + 'static> DynResource for T {}
 
 pub struct GlobalContainer<T> {
     pub inner: T
+} impl<T> GlobalContainer<T> {
+    pub fn new(value: T) -> Self {
+        Self { inner: value }
+    }
 }
 
 impl<T: 'static> AsAny for GlobalContainer<T> {
@@ -277,20 +281,6 @@ pub(crate) struct Data {
             silos: HashMap::new(),
         }
     }
-
-    pub fn get_dyn_container_1<A: IsQueryElement>(&mut self) -> [&mut dyn DynEcsContainer; 1] {
-        let [a_silo] = self.silos.get_disjoint_mut([&TypeId::of::<A::ComponentType>()]);
-        let [a_res] = self.resources.get_disjoint_mut([&TypeId::of::<A::ResourceType>()]);
-        let a: Option<&mut dyn DynEcsContainer> =
-            match (a_silo, a_res) {
-                (None, Some(a_res)) => { Some(&mut **a_res) },
-                (Some(a_silo), None) => { Some(&mut **a_silo) },
-                (None, None) => { None }
-                _ => { None }
-            };
-
-    }
-
 }
 
 
@@ -312,42 +302,42 @@ pub struct Ecs {
        ett
     }
 
-    pub fn add_resource<T: DynResource>(&mut self, value: T) -> Res<T> {
-        self.data.resources.insert(TypeId::of::<T>(), Box::new(value));
+    pub fn add_resource<T: 'static>(&mut self, value: T) -> Res<T> {
+        self.data.resources.insert(TypeId::of::<T>(), Box::new(GlobalContainer::new(value)));
         Res { _phantom: PhantomData }
     }
     
-    pub fn get_resource<T: DynResource>(&self) -> &T {
+    pub fn get_resource<T: 'static>(&self) -> &T {
         let type_name = std::any::type_name::<T>();
 
         let dyn_res = self.data.resources.get(&TypeId::of::<T>())
             .expect("invald resource handle");
-        let typed_res = dyn_res.as_any().downcast_ref::<T>()
+        let typed_res = dyn_res.as_any().downcast_ref::<GlobalContainer<T>>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
 
-        typed_res
+        &typed_res.inner
     }
 
-    pub fn get_resource_clone<T: DynResource + Clone>(&self) -> T {
+    pub fn get_resource_clone<T: Clone + 'static>(&self) -> T {
         let type_name = std::any::type_name::<T>();
 
         let dyn_res = self.data.resources.get(&TypeId::of::<T>())
             .expect("invald resource handle");
-        let typed_res = dyn_res.as_any().downcast_ref::<T>()
+        let typed_res = dyn_res.as_any().downcast_ref::<GlobalContainer<T>>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
 
-        typed_res.clone()
+        typed_res.inner.clone()
     }
 
-    pub fn get_resource_mut<T: DynResource>(&mut self) -> &mut T {
+    pub fn get_resource_mut<T: 'static>(&mut self) -> &mut T {
         let type_name = std::any::type_name::<T>();
 
         let dyn_res = self.data.resources.get_mut(&TypeId::of::<T>())
             .expect("invald resource handle");
-        let typed_res = dyn_res.as_any_mut().downcast_mut::<T>()
+        let typed_res = dyn_res.as_any_mut().downcast_mut::<GlobalContainer<T>>()
             .expect(format!("failed to cast dyn resource to type {type_name}").as_str());
 
-        typed_res
+        &mut typed_res.inner
     }
 
     pub fn add<T: 'static>(&mut self, entity: Entity, component: T) -> Handle<T> {
@@ -392,58 +382,6 @@ pub struct Ecs {
 
     pub fn get_container_mut<T: 'static>(&mut self) -> Option<&mut SparseSet<T>> {
         self.data.silos.get_mut(&TypeId::of::<T>()).and_then(|x| x.as_any_mut().downcast_mut())
-    }
-
-    pub fn get_containers_1<'a, A: IsQueryElement>(&'a mut self) -> (Option<&'a mut A::ComponentContainerType>,) {
-        let [a,] = self.data.silos.get_disjoint_mut([&TypeId::of::<A::Type>(),]);
-        (a.and_then(|a| A::cast_container(a)),)
-    }
-
-    pub fn get_containers_2<'a, A: IsQueryElement, B: IsQueryElement>(&'a mut self)
-        -> (Option<&'a mut A::ComponentContainerType>, Option<&'a mut B::ComponentContainerType>) 
-    {
-        let [a, b] = self.data.silos.get_disjoint_mut([&TypeId::of::<A::Type>(), &TypeId::of::<B::Type>()]);
-        (a.and_then(|a| A::cast_container(a)), b.and_then(|b| B::cast_container(b)))
-    }
-
-    pub fn get_containers_3<'a, 
-        A: IsQueryElement, 
-        B: IsQueryElement,
-        C: IsQueryElement>(&'a mut self) -> (
-            Option<&'a mut A::ComponentContainerType>, 
-            Option<&'a mut B::ComponentContainerType>, 
-            Option<&'a mut C::ComponentContainerType>) 
-    {
-        let [a, b, c] = self.data.silos.get_disjoint_mut([
-            &TypeId::of::<A::Type>(), 
-            &TypeId::of::<B::Type>(), 
-            &TypeId::of::<C::Type>()]);
-
-        (a.and_then(|a| A::cast_container(a)), 
-            b.and_then(|b| B::cast_container(b)), 
-            c.and_then(|c| C::cast_container(c)))
-    }
-
-    pub fn get_containers_4<'a, 
-        A: IsQueryElement, 
-        B: IsQueryElement,
-        C: IsQueryElement,
-        D: IsQueryElement>(&'a mut self) -> (
-            Option<&'a mut A::ComponentContainerType>, 
-            Option<&'a mut B::ComponentContainerType>, 
-            Option<&'a mut C::ComponentContainerType>, 
-            Option<&'a mut D::ComponentContainerType>) 
-    {
-        let [a, b, c, d] = self.data.silos.get_disjoint_mut([
-            &TypeId::of::<A::Type>(), 
-            &TypeId::of::<B::Type>(), 
-            &TypeId::of::<C::Type>(),
-            &TypeId::of::<D::Type>()]);
-
-        (a.and_then(|a| A::cast_container(a)), 
-            b.and_then(|b| B::cast_container(b)), 
-            c.and_then(|c| C::cast_container(c)),
-            d.and_then(|d| D::cast_container(d)))
     }
 
     pub fn get_clone<T: 'static + Clone>(&self, entity: Entity) -> Option<T> {
@@ -640,10 +578,11 @@ impl<T: DynResource> IndexMut<Res<T>> for Ecs {
 
 #[cfg(test)]
 mod test {
-    use crate::ecs::{Ecs};
+    use crate::{ecs::Ecs, query::GlobalMut};
 
     struct C1(bool);
     struct C2(bool);
+    struct CR(bool);
 
     #[test]
     fn test() {
@@ -651,6 +590,8 @@ mod test {
         let ett = ecs.new_entity();
         ecs.add(ett, C1(true));
         ecs.add(ett, C2(false));
+        ecs.add_resource(CR(true));
+
 
         let closure_system = |c1: &C1, c2: &C2| {
             println!("c1 is {}, c2 is {}", c1.0, c2.0);
@@ -660,6 +601,10 @@ mod test {
         ecs.exec(closure_system);
         ecs.exec(change_c1);
         ecs.exec(print_component);
+        ecs.get_resource_mut::<CR>().0 = false;
+        println!("CR is now {:?}", ecs.get_resource::<CR>().0);
+        ecs.get_resource_mut::<CR>().0 = true;
+        println!("CR is now {:?}", ecs.get_resource::<CR>().0);
     }
 
     fn print_component(c1: &C1, c2: &C2) {

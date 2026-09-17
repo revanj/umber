@@ -63,7 +63,7 @@ pub struct SparseSet<T> {
         if dense_index == GenerationalIndex::null() { return false; }
         let dense_index = dense_index.index();
         if dense_index >= self.dense.len() { return false }
-        if self.dense[dense_index].0 != index { return false; }
+        if self.dense[dense_index].0 != index { println!("generation mismatch"); return false; }
 
         true
     }
@@ -132,7 +132,7 @@ impl <'a, T> Iterator for IndexIterator<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.container.len() {
-            let ret = Some(self.container.sparse[self.container.dense[self.idx].0.index()]);
+            let ret = Some(self.container.dense[self.idx].0);
             self.idx += 1;
             ret
         }
@@ -148,13 +148,14 @@ impl <'a, T> Iterator for EntityIterator<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.container.len() {
-            let ret = Some(Entity::from(self.container.sparse[self.container.dense[self.idx].0.index()]));
+            let ret = Some(Entity::from(self.container.dense[self.idx].0));
             self.idx += 1;
             ret
         }
         else { None }
     }
 }
+
 impl <'a, T> From<IndexIterator<'a, T>> for EntityIterator<'a, T> {
     fn from(value: IndexIterator<'a, T>) -> Self {
         Self {
@@ -174,7 +175,7 @@ impl <'a, T> Iterator for EntityComponentIterator<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx < self.container.len() {
             let ret = Some((
-                Entity::from(self.container.sparse[self.container.dense[self.idx].0.index()]),
+                Entity::from(self.container.dense[self.idx].0),
                 unsafe {self.container.dense[self.idx].1.assume_init_ref()}
             ));
             self.idx += 1;
@@ -309,7 +310,7 @@ impl<T: 'static> DynEcsEntityContainer for SparseSet<T> {
     }
 
     fn entities_vec(&self) -> Vec<Entity> {
-        EntityIterator::from(self.indices()).collect()
+        self.entities().collect()
     }
 }
 

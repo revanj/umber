@@ -4,15 +4,12 @@ use crate::EcsEntityContainer;
 use crate::DynEcsEntityContainer;
 use crate::SparseSet;
 use crate::Entity;
-use crate::DynResource;
 use crate::GenerationalIndex;
 use crate::ecs::Data;
 use crate::ecs::DynEcsContainer;
-use crate::ecs::EcsContainer;
 use crate::ecs::EcsResourceContainer;
 use crate::ecs::GlobalContainer;
 use foldhash::HashMap;
-use rj::AsAny;
 
 pub trait Downgrade {
     type Ref;
@@ -167,7 +164,7 @@ impl<A: 'static, B: 'static, C: 'static> IsQuery for (A, B, C) {
     }
 }
 
-struct NonExistent;
+pub struct NonExistent;
 
 pub trait IsQueryElement {
     type Item<'c>;
@@ -349,7 +346,7 @@ where
     }
 }
 
-fn shortest_at(containers: &mut [&mut dyn DynEcsContainer]) -> Option<usize>{
+fn shortest_at(containers: &mut [&mut dyn DynEcsContainer]) -> Option<(usize, usize)>{
     let mut min_len_pos: Option<(usize, usize)> = None;
     for i in 0..containers.len() {
         if !containers[i].is_resource() {
@@ -362,8 +359,8 @@ fn shortest_at(containers: &mut [&mut dyn DynEcsContainer]) -> Option<usize>{
             }
         }
     }
-
-    if let Some((_, pos)) = min_len_pos { Some(pos) } else { None }
+    
+    min_len_pos
 }
 
 fn container_to_arg<A: IsQueryElement>(container: &mut dyn DynEcsContainer, ett: Entity) -> Option<A::Item<'_>> {
@@ -405,7 +402,7 @@ impl<F, A, B> System<fn(A, B)> for F
 
         let mut containers = [container_a, container_b];
         
-        let entt = if let Some(pos) = shortest_at(&mut containers) {
+        let entt = if let Some((len, pos)) = shortest_at(&mut containers) {
             Some(containers[pos].as_component().unwrap().entities_vec())
         } else {
             None
@@ -432,41 +429,61 @@ impl<F, A, B, C> System<fn(A, B, C)> for F
 {
     fn call(&mut self, data: &mut Data)
     {
-        let [a, b, c] = data.silos.get_disjoint_mut([
-            &TypeId::of::<A::Type>(), 
-            &TypeId::of::<B::Type>(), 
-            &TypeId::of::<C::Type>()]);
+        let [a_silo, b_silo, c_silo] = data.silos.get_disjoint_mut([
+            &TypeId::of::<A::ComponentType>(), 
+            &TypeId::of::<B::ComponentType>(),
+            &TypeId::of::<C::ComponentType>()]);
 
-        let abc_options = (a.and_then(|a| A::cast_container(a)), 
-            b.and_then(|b| B::cast_container(b)), 
-            c.and_then(|c| C::cast_container(c)));
-
-        let (Some(container_a), Some(container_b), Some(container_c)) = abc_options
+        let [a_res, b_res, c_res] = data.resources.get_disjoint_mut([
+            &TypeId::of::<A::ResourceType>(), 
+            &TypeId::of::<B::ResourceType>(),
+            &TypeId::of::<C::ResourceType>(),
+        ]);
+        let a: Option<&mut dyn DynEcsContainer> =
+            match (a_silo, a_res) {
+                (None, Some(a_res)) => { Some(&mut **a_res) },
+                (Some(a_silo), None) => { Some(&mut **a_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let b: Option<&mut dyn DynEcsContainer> =
+            match (b_silo, b_res) {
+                (None, Some(b_res)) => { Some(&mut **b_res) },
+                (Some(b_silo), None) => { Some(&mut **b_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let c: Option<&mut dyn DynEcsContainer> =
+            match (c_silo, c_res) {
+                (None, Some(c_res)) => { Some(&mut **c_res) },
+                (Some(c_silo), None) => { Some(&mut **c_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let (Some(container_a), Some(container_b), Some(container_c)) = (a, b, c)
         else { return };
-        
-        if container_a.len() <= container_b.len() && container_a.len() <= container_c.len() {
-            for (ett, component) in container_a.entities_components_mut() {
-                if let Some(component_b) = container_b.get_mut(ett)
-                && let Some(component_c) = container_c.get_mut(ett){
-                    (self)(A::convert(component), B::convert(component_b), C::convert(component_c));
-                }
-            }
-        }
 
-        else if container_b.len() <= container_a.len() && container_b.len() <= container_c.len() {
-            for (ett, component) in container_b.entities_components_mut() {
-                if let Some(component_a) = container_a.get_mut(ett)
-                && let Some(component_c) = container_c.get_mut(ett){
-                    (self)(A::convert(component_a), B::convert(component), C::convert(component_c));
-                }
+        let mut containers = [container_a, container_b, container_c];
+        
+        let entt = if let Some((len, pos)) = shortest_at(&mut containers) {
+            Some(containers[pos].as_component().unwrap().entities_vec())
+        } else {
+            None
+        };
+
+        let [container_a, container_b, container_c] = containers;
+        if let Some(entt) = entt {
+            for ett in entt {
+                let Some(arg_a) = container_to_arg::<A>(container_a, ett) else { continue; };
+                let Some(arg_b) = container_to_arg::<B>(container_b, ett) else { continue; };
+                let Some(arg_c) = container_to_arg::<C>(container_c, ett) else { continue; };
+                (self)(arg_a, arg_b, arg_c)
             }
         } else {
-            for (ett, component) in container_c.entities_components_mut() {
-                if let Some(component_a) = container_a.get_mut(ett)
-                && let Some(component_b) = container_b.get_mut(ett){
-                    (self)(A::convert(component_a), B::convert(component_b), C::convert(component));
-                }
-            }
+            (self)(
+                A::convert(container_a.as_any_mut().downcast_mut::<A::ResourceContainerType>().unwrap().get_mut()), 
+                B::convert(container_b.as_any_mut().downcast_mut::<B::ResourceContainerType>().unwrap().get_mut()),
+                C::convert(container_c.as_any_mut().downcast_mut::<C::ResourceContainerType>().unwrap().get_mut()));
         }
     }
 }
