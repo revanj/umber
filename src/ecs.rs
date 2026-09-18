@@ -597,18 +597,14 @@ mod test {
 
         ecs.exec(print_component);
         ecs.exec(closure_system);
-        ecs.exec(change_c1);
+        ecs.exec(change_cr);
         ecs.exec(print_component);
-        ecs.get_resource_mut::<CR>().0 = false;
-        println!("CR is now {:?}", ecs.get_resource::<CR>().0);
-        ecs.get_resource_mut::<CR>().0 = true;
-        println!("CR is now {:?}", ecs.get_resource::<CR>().0);
     }
 
     fn print_component(c1: &C1, c2: &C2) {
         println!("c1 is {}, c2 is {}", c1.0, c2.0);
     }
-    fn change_c1(c1: &mut C1) {
-        c1.0 = false;
+    fn change_cr(c1: GlobalMut<CR>) {
+        c1.inner.0 = false;
     }
 }

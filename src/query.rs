@@ -242,7 +242,7 @@ pub struct Global<'a, T> { pub inner: &'a T }
 pub struct GlobalMut<'a, T> { pub inner: &'a mut T }
 
 impl<'a, T> IsQueryElement for Global<'a, T> where T: 'static {
-    type Item<'c> = &'c T;
+    type Item<'c> = Global<'c, T>;
     type Type = T;
     type GlobalType = T;
     type ComponentType = NonExistent;
@@ -256,7 +256,7 @@ impl<'a, T> IsQueryElement for Global<'a, T> where T: 'static {
         None
     }
     fn convert<'c>(item: &'c mut T) -> Self::Item<'c>{
-        item
+        Global { inner: item }
     }
 
     fn cast_global_container(container: &mut Box<dyn DynEcsContainer>) -> Option<&mut Self::GlobalContainerType> {
@@ -270,7 +270,7 @@ impl<'a, T> IsQueryElement for Global<'a, T> where T: 'static {
 }
 
 impl<'a, T> IsQueryElement for GlobalMut<'a, T> where T: 'static {
-    type Item<'c> = &'c mut T;
+    type Item<'c> = GlobalMut<'c, T>;
     type Type = T;
     type GlobalType = T;
     type ComponentType = NonExistent;
@@ -284,7 +284,7 @@ impl<'a, T> IsQueryElement for GlobalMut<'a, T> where T: 'static {
         None
     }
     fn convert<'c>(item: &'c mut T) -> Self::Item<'c>{
-        item
+        GlobalMut { inner: item }
     }
 
     fn cast_global_container(container: &mut Box<dyn DynEcsContainer>) -> Option<&mut Self::GlobalContainerType> {
@@ -299,12 +299,10 @@ impl<'a, T> IsQueryElement for GlobalMut<'a, T> where T: 'static {
 
 pub trait SystemDyn {
     fn call(&mut self, data: &mut Data);
-    //fn call_entity(&mut self, data: &mut Data, entity: Entity);
 }
 
 pub trait System<Params> {
     fn call(&mut self, data: &mut Data);
-    //fn call_entity(&mut self, data: &mut Data, entity: Entity);
 }
 
 impl<F, A> System<fn(A,)> for F 
