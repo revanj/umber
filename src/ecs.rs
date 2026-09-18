@@ -1,5 +1,4 @@
 pub use rj::AsAny;
-use rj::TypeIds;
 use std::any::{TypeId};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -9,7 +8,6 @@ use std::fmt::Debug;
 
 use crate::{GenerationalIndex, SystemDyn};
 use crate::SparseSet;
-use crate::IsQueryElement;
 use crate::System;
 use crate::IsQuery;
 use crate::TypeIdArray;
@@ -156,7 +154,7 @@ pub trait EcsContainer: DynEcsContainer {
     type Item;
 }
 
-pub trait EcsResourceContainer: EcsContainer {
+pub trait EcsGlobalContainer: EcsContainer {
     fn get(&self) -> &Self::Item;
     fn get_mut(&mut self) -> &mut Self::Item;
 }
@@ -253,7 +251,7 @@ impl<T: 'static> EcsContainer for GlobalContainer<T> {
     type Item = T;
 }
 
-impl<T: 'static> EcsResourceContainer for GlobalContainer<T> {
+impl<T: 'static> EcsGlobalContainer for GlobalContainer<T> {
     fn get(&self) -> &Self::Item {
         &self.inner
     }
@@ -269,7 +267,7 @@ pub struct Res<T> {
 }
 
 
-pub(crate) struct Data {
+pub struct Data {
     pub entities: Vec<Entity>,
     pub resources: HashMap<TypeId, Box<dyn DynEcsContainer>>,
     pub silos: HashMap<TypeId, Box<dyn DynEcsEntityContainer>>,
