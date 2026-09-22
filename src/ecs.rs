@@ -13,6 +13,12 @@ use crate::IsQuery;
 use crate::TypeIdArray;
 use crate::Downgrade;
 
+use crate::DynEcsContainer;
+use crate::DynEcsEntityContainer;
+use crate::GlobalContainer;
+
+
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct DynHandle {
@@ -145,35 +151,6 @@ impl<T, Meta> Hash for MetaHandle<T, Meta> {
     }
 }
 
-pub trait DynEcsContainer: AsAny {
-    fn is_resource(&self) -> bool;
-    fn as_component(&mut self) -> Option<&mut dyn DynEcsEntityContainer>;
-}
-
-pub trait EcsContainer: DynEcsContainer {
-    type Item;
-}
-
-pub trait EcsGlobalContainer: EcsContainer {
-    fn get(&self) -> &Self::Item;
-    fn get_mut(&mut self) -> &mut Self::Item;
-}
-
-pub trait DynEcsEntityContainer: DynEcsContainer {
-    fn len(&self) -> usize; 
-    fn contains_entity(&self, entity: Entity) -> bool;
-    fn entities_vec(&self) -> Vec<Entity>;
-}
-
-pub trait EcsEntityContainer: DynEcsEntityContainer  + EcsContainer {
-    fn entities(&self) -> impl Iterator<Item=Entity>;
-    fn get(&self, ett: Entity) -> Option<&Self::Item>;
-    fn get_mut(&mut self, ett: Entity) -> Option<&mut Self::Item>;
-    fn components(&mut self) -> impl Iterator<Item=&Self::Item>; 
-    fn components_mut(&mut self) -> impl Iterator<Item=&mut Self::Item>; 
-    fn entities_components(&self) -> impl Iterator<Item=(Entity, &Self::Item)>;
-    fn entities_components_mut(&mut self) -> impl Iterator<Item=(Entity, &mut Self::Item)>;
-}
 
 pub enum TreeOrder {
     PostOrder,
@@ -219,47 +196,6 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 pub trait DynResource: AsAny + 'static {}
 impl<T: AsAny + 'static> DynResource for T {}
 
-pub struct GlobalContainer<T> {
-    pub inner: T
-} impl<T> GlobalContainer<T> {
-    pub fn new(value: T) -> Self {
-        Self { inner: value }
-    }
-}
-
-impl<T: 'static> AsAny for GlobalContainer<T> {
-    fn as_any(self: &Self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(self: &mut Self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-impl<T: 'static> DynEcsContainer for GlobalContainer<T> {
-    fn is_resource(&self) -> bool {
-        true
-    }
-
-    fn as_component(&mut self) -> Option<&mut dyn DynEcsEntityContainer> {
-        None
-    }
-}
-
-impl<T: 'static> EcsContainer for GlobalContainer<T> {
-    type Item = T;
-}
-
-impl<T: 'static> EcsGlobalContainer for GlobalContainer<T> {
-    fn get(&self) -> &Self::Item {
-        &self.inner
-    }
-
-    fn get_mut(&mut self) -> &mut Self::Item {
-        &mut self.inner
-    }
-}
 
 #[derive(Copy, Clone)]
 pub struct Res<T> {

@@ -5,7 +5,7 @@ use crate::Entity;
 use crate::EcsEntityContainer;
 use crate::DynEcsEntityContainer;
 use crate::GenerationalIndex;
-use crate::ecs::{DynEcsContainer, EcsContainer};
+use super::{DynEcsContainer, EcsContainer};
 
 
 pub struct SparseSet<T> {

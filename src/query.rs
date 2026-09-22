@@ -1,14 +1,19 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
+
 use crate::EcsEntityContainer;
 use crate::DynEcsEntityContainer;
 use crate::SparseSet;
 use crate::Entity;
+use crate::DynEcsContainer;
+use crate::EcsGlobalContainer;
+use crate::GlobalContainer;
+
 use crate::GenerationalIndex;
+
 use crate::ecs::Data;
-use crate::ecs::DynEcsContainer;
-use crate::ecs::EcsGlobalContainer as EcsGlobalContainer;
-use crate::ecs::GlobalContainer;
+
+
 use foldhash::HashMap;
 
 pub trait Downgrade {

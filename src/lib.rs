@@ -5,8 +5,8 @@ mod containers;
 pub use containers::sparse_set::SparseSet;
 pub use containers::GenerationalIndex;
 
-use ecs::DynEcsEntityContainer;
-use ecs::EcsEntityContainer;
+use containers::*;
+use containers::global::*;
 
 use query::System;
 use query::TypeIdArray;
