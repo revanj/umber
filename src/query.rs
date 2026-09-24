@@ -304,10 +304,12 @@ impl<'a, T> IsQueryElement for GlobalMut<'a, T> where T: 'static {
 
 pub trait SystemDyn {
     fn call(&mut self, data: &mut Data);
+    fn call_entity(&mut self, data: &mut Data, entity: Entity);
 }
 
 pub trait System<Params> {
     fn call(&mut self, data: &mut Data);
+    fn call_entity(&mut self, data: &mut Data, entity: Entity);
 }
 
 impl<F, A> System<fn(A,)> for F 
@@ -323,8 +325,15 @@ impl<F, A> System<fn(A,)> for F
             (self)(A::convert(container.get_mut()));
         }
     }
-}
 
+    fn call_entity(&mut self, data: &mut Data, entity: Entity) {
+        if let Some(container) = A::typed_component_container(data) {
+            (self)(A::convert(container.get_mut(entity).expect("no such entity or entity has no such component")));
+        } else if let Some(container) = A::typed_global_container(data) {
+            (self)(A::convert(container.get_mut()));
+        }
+    }
+}
 pub struct SystemFn<F, Params> {
     f: F,
     _params: PhantomData<Params>,
@@ -334,7 +343,10 @@ impl<F, Params> SystemDyn for SystemFn<F, Params>
 where F: System<Params>,
 {
     fn call(&mut self, data: &mut Data) {
-        System::<Params>::call(&mut self.f, data)
+        System::<Params>::call(&mut self.f, data);
+    }
+    fn call_entity(&mut self, data: &mut Data, entity: Entity) {
+        System::<Params>::call_entity(&mut self.f, data, entity);
     }
 }
 
@@ -425,6 +437,31 @@ impl<F, A, B> System<fn(A, B)> for F
                 B::convert(container_b.as_any_mut().downcast_mut::<B::GlobalContainerType>().unwrap().get_mut()));
         }
     }
+    fn call_entity(&mut self, data: &mut Data, entity: Entity) {
+        let [a_silo, b_silo] = data.silos.get_disjoint_mut([&TypeId::of::<A::ComponentType>(), &TypeId::of::<B::ComponentType>()]);
+        let [a_res, b_res] = data.resources.get_disjoint_mut([&TypeId::of::<A::GlobalType>(), &TypeId::of::<B::GlobalType>()]);
+        let a: Option<&mut dyn DynEcsContainer> =
+            match (a_silo, a_res) {
+                (None, Some(a_res)) => { Some(&mut **a_res) },
+                (Some(a_silo), None) => { Some(&mut **a_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let b: Option<&mut dyn DynEcsContainer> =
+            match (b_silo, b_res) {
+                (None, Some(b_res)) => { Some(&mut **b_res) },
+                (Some(b_silo), None) => { Some(&mut **b_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let (Some(container_a), Some(container_b)) = (a, b)
+        else { return };
+        
+        let Some(arg_a) = container_to_arg::<A>(container_a, entity) else { return; };
+        let Some(arg_b) = container_to_arg::<B>(container_b, entity) else { return; };
+        (self)(arg_a, arg_b)
+        
+    }
 }
 
 
@@ -490,5 +527,47 @@ impl<F, A, B, C> System<fn(A, B, C)> for F
                 B::convert(container_b.as_any_mut().downcast_mut::<B::GlobalContainerType>().unwrap().get_mut()),
                 C::convert(container_c.as_any_mut().downcast_mut::<C::GlobalContainerType>().unwrap().get_mut()));
         }
+    }
+
+    fn call_entity(&mut self, data: &mut Data, entity: Entity) {
+        let [a_silo, b_silo, c_silo] = data.silos.get_disjoint_mut([
+            &TypeId::of::<A::ComponentType>(), 
+            &TypeId::of::<B::ComponentType>(),
+            &TypeId::of::<C::ComponentType>()]);
+
+        let [a_res, b_res, c_res] = data.resources.get_disjoint_mut([
+            &TypeId::of::<A::GlobalType>(), 
+            &TypeId::of::<B::GlobalType>(),
+            &TypeId::of::<C::GlobalType>()]);
+
+        let a: Option<&mut dyn DynEcsContainer> =
+            match (a_silo, a_res) {
+                (None, Some(a_res)) => { Some(&mut **a_res) },
+                (Some(a_silo), None) => { Some(&mut **a_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let b: Option<&mut dyn DynEcsContainer> =
+            match (b_silo, b_res) {
+                (None, Some(b_res)) => { Some(&mut **b_res) },
+                (Some(b_silo), None) => { Some(&mut **b_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let c: Option<&mut dyn DynEcsContainer> =
+            match (c_silo, c_res) {
+                (None, Some(c_res)) => { Some(&mut **c_res) },
+                (Some(c_silo), None) => { Some(&mut **c_silo) },
+                (None, None) => { None }
+                _ => { None }
+            };
+        let (Some(container_a), Some(container_b), Some(container_c)) = (a, b, c)
+        else { return };
+
+        let Some(arg_a) = container_to_arg::<A>(container_a, entity) else { return; };
+        let Some(arg_b) = container_to_arg::<B>(container_b, entity) else { return; };
+        let Some(arg_c) = container_to_arg::<C>(container_c, entity) else { return; };
+
+        (self)(arg_a, arg_b, arg_c)
     }
 }

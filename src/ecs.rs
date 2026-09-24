@@ -30,7 +30,9 @@ impl<T: 'static> From<Handle<T>> for DynHandle {
     fn from(value: Handle<T>) -> Self { Self { id: value.0, type_id: TypeId::of::<T>() } }
 }
 impl<T: 'static> From<&Handle<T>> for DynHandle {
-    fn from(value: &Handle<T>) -> Self { Self { id: value.0, type_id: TypeId::of::<T>() } }
+    fn from(value: &Handle<T>) -> Self {
+        Self { id: value.0, type_id: TypeId::of::<T>() }
+    }
 }
 
 pub struct Handle<T>(GenerationalIndex, PhantomData<T>);
@@ -461,8 +463,8 @@ pub struct Ecs {
         system.call(&mut self.data);
     }
 
-    pub fn add_entity_trigger<Trigger: 'static, Params, S: System<Params> + SystemDyn +'static>(
-        &mut self, entity: Entity, system: S) 
+    pub fn add_entity_trigger<Trigger: 'static, Params, S: System<Params> + SystemDyn +'static>
+        (&mut self, entity: Entity, system: S) 
     {
         if !self.entity_triggers.contains_key(&entity) {
             self.entity_triggers.insert(entity, HashMap::new());
@@ -473,11 +475,11 @@ pub struct Ecs {
         self.entity_triggers.get_mut(&entity).unwrap().get_mut(&TypeId::of::<Trigger>()).unwrap().push(Box::new(system));
     }
 
-    pub fn entity_trigger<Trigger: 'static>(&mut self, entity: Entity, trigger: Trigger) {
+    pub fn entity_trigger<Trigger: 'static>(&mut self, entity: Entity, _trigger: Trigger) {
         if let Some(hash_map) = self.entity_triggers.get_mut(&entity) 
         && let Some(systems) = hash_map.get_mut(&TypeId::of::<Trigger>()) { 
             for s in systems {
-                s.call(&mut self.data);
+                s.call_entity(&mut self.data, entity);
             }
         }
     }
